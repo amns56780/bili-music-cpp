@@ -136,6 +136,20 @@ std::vector<std::pair<std::string, std::string>> apiHeaders(const std::string& c
 
 }  // namespace
 
+int64_t parseDeadlineEpochSeconds(const std::string& url) {
+    const std::string marker = "deadline=";
+    const size_t pos = url.find(marker);
+    if (pos == std::string::npos) return 0;
+    size_t end = pos + marker.size();
+    while (end < url.size() && url[end] >= '0' && url[end] <= '9') ++end;
+    if (end == pos + marker.size()) return 0;
+    try {
+        return (int64_t)std::stoll(url.substr(pos + marker.size(), end - (pos + marker.size())));
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 std::string AudioStreamInfo::qualityLabel() const {
     switch (qualityId) {
         case 30216: return "64K";
@@ -235,6 +249,18 @@ int BiliService::importCookieText(const std::string& text) {
     cookies_ = parsed;
     saveSettings();
     return (int)cookies_.size();
+}
+
+std::string BiliService::getSetting(const std::string& key) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const auto it = values_.find(key);
+    return it == values_.end() ? std::string() : it->second;
+}
+
+bool BiliService::setSetting(const std::string& key, const std::string& value) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    values_[key] = value;
+    return saveSettings();
 }
 
 void BiliService::clearCookie() {
@@ -469,6 +495,7 @@ AudioStreamInfo BiliService::resolveAudio(const std::string& bvid, long long cid
                 info.ok = true;
                 info.url = picked->baseUrl;
                 info.backupUrls = picked->backups;
+                info.deadlineEpochSeconds = parseDeadlineEpochSeconds(picked->baseUrl);
                 info.qualityId = picked->id;
                 info.downgraded = qualityId > 0 && qualityId != picked->id;
                 info.message = "取流成功";
@@ -482,6 +509,7 @@ AudioStreamInfo BiliService::resolveAudio(const std::string& bvid, long long cid
                 if (!url.empty()) {
                     info.ok = true;
                     info.url = url;
+                    info.deadlineEpochSeconds = parseDeadlineEpochSeconds(url);
                     info.qualityId = data.value("quality", 0);
                     info.message = "取流成功（durl）";
                     return true;

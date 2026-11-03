@@ -115,6 +115,55 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     const float controlsCenterY = 8.0f + 19.0f;       // 播放键 / 控制行中心（局部 y=27）
     const float progressCenterY = 50.0f + 7.0f;       // 进度条中心（局部 y=57）
     const float rightCenterY = (controlsCenterY + progressCenterY) * 0.5f - 4.0f;  // 38（用户要求再上移一点）
+
+    // 音质档位（仅在线曲目）：进度条和音量组之间的空档里放一个小胶囊
+    if (data.showQuality) {
+        const float chipWidth = 66.0f;
+        const float chipHeight = 22.0f;
+        const float chipX = progressRight + 8.0f;
+        const float chipY = rightCenterY - chipHeight / 2.0f;
+        ImGui::PushID("quality_chip");
+        ImGui::SetCursorPos(ImVec2(chipX, chipY));
+        const bool qualityClicked = ImGui::InvisibleButton("##quality", ImVec2(chipWidth, chipHeight));
+        const bool qualityHovered = ImGui::IsItemHovered();
+        if (qualityHovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        draw->AddRectFilled(abs(chipX, chipY), abs(chipX + chipWidth, chipY + chipHeight),
+                            qualityHovered ? Colors::Hover : Colors::TagBg, 11.0f);
+        TextEllipsis(data.qualityLabel, chipWidth - 24.0f, GetFonts().small, Colors::Text2,
+                     abs(chipX + 7.0f, chipY + 3.0f));
+        // 下拉小三角用几何图形画（字体里没有 ▾ 字形）
+        const ImVec2 arrow(chipX + chipWidth - 12.0f, chipY + chipHeight / 2.0f);
+        draw->AddTriangleFilled(ImVec2(arrow.x - 4.0f, arrow.y - 2.0f),
+                                ImVec2(arrow.x + 4.0f, arrow.y - 2.0f),
+                                ImVec2(arrow.x, arrow.y + 3.0f), Colors::Text3);
+        if (qualityClicked) ImGui::OpenPopup("quality_menu");
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, Ui::Vec4(Ui::Colors::Dialog));
+        ImGui::PushStyleColor(ImGuiCol_Text, Ui::Vec4(Ui::Colors::Text));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+        if (ImGui::BeginPopup("quality_menu")) {
+            struct QualityOption {
+                int id;
+                const char* label;
+            };
+            const QualityOption options[] = {
+                {0, "自动（推荐）"}, {30280, "192K"},   {30232, "132K"},
+                {30216, "64K"},      {30251, "Hi-Res 无损"}, {30250, "杜比全景声"},
+            };
+            for (const QualityOption& option : options) {
+                const bool selected = option.id == data.qualityId;
+                if (ImGui::Selectable(option.label, selected)) {
+                    actions->qualitySelected = true;
+                    actions->qualityId = option.id;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
+        ImGui::PopID();
+    }
+
     draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 6.0f), Colors::Text2,
                   volumeIcon.c_str());
     static bool volumeDragging = false;

@@ -32,6 +32,8 @@ private:
         std::string message;
         int qualityId = 0;
         bool downgraded = false;
+        std::vector<std::string> backupUrls;
+        int64_t deadlineEpochSeconds = 0;
         std::string userName;
         long long userId = 0;
         bool loggedIn = false;
@@ -55,6 +57,8 @@ private:
     void postAsync(AsyncEvent event);
     void pollAsync();
     void drawDialogs();
+    void checkPlaybackStall();
+    void applyQualitySelection(int qualityId);
 
     GLFWwindow* window_ = nullptr;
     LibraryStore store_;
@@ -76,6 +80,19 @@ private:
     double durationMs_ = 0.0;
     bool playing_ = false;
     bool hasMedia_ = false;
+
+    // 音质档位（0=自动）与在线播放的当前流信息（用于备用地址/过期重取）
+    int qualityId_ = 0;
+    bool currentIsOnline_ = false;
+    std::string curBvid_;
+    long long curCid_ = 0;
+    std::vector<std::string> curBackups_;
+    int backupIndex_ = 0;
+    int64_t curDeadlineEpoch_ = 0;
+    int lastStreamQualityId_ = 0;
+    double pendingSeekMs_ = -1.0;
+    uint64_t stallWatchStartTick_ = 0;
+    int stallRetries_ = 0;
 
     // 登录/账号
     std::string accountName_;

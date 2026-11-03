@@ -36,9 +36,10 @@
 - [x] view 接口取 cid/标题/UP主；wbi/playurl 取流 + 强刷 key 重试 + 备选接口
 - [x] 音质降级链（指定档位 → 192K → 132K → 64K → 最高带宽）与 durl 兜底
 - [x] 在线播放（libVLC + Referer/UA）、上一首/下一首自动取流、粘贴 BV 弹窗
+- [x] 音质档位 UI（自动/192K/132K/64K/Hi-Res/杜比，写入 audio_quality 与 Java 共用）
+- [x] 备用 URL 自动切换 + 起播无进度时强制重新取流（URL 过期兜底）
+- [x] 网络缓存 20s
 - [ ] 扫码登录（QR 编码）
-- [ ] 音质档位 UI（自动/192K/132K/64K/Hi-Res/杜比）
-- [ ] 备用 URL 自动切换、取流 URL 过期自动重取
 
 ## M2 之后
 

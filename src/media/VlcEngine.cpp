@@ -242,7 +242,7 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
     }
     // 网络流缓存：默认 1000ms 在「暂停 → 恢复」时容易把缓冲耗干，恢复瞬间断断续续。
     // 加大到 5s 让恢复后先有足够的缓冲；http-reconnect 让连接断掉时自动重连。
-    api_->libvlc_media_add_option(media_, ":network-caching=3000");
+    api_->libvlc_media_add_option(media_, ":network-caching=20000");
     api_->libvlc_media_add_option(media_, ":http-reconnect=true");
     if (!referrer.empty()) {
         api_->libvlc_media_add_option(media_, (":" + std::string("http-referrer=") + referrer).c_str());

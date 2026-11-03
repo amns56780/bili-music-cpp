@@ -32,6 +32,7 @@ struct AudioStreamInfo {
     std::vector<std::string> backupUrls;
     int qualityId = 0;
     bool downgraded = false;
+    int64_t deadlineEpochSeconds = 0;  // URL 里的 deadline 参数（epoch 秒），0 表示未知
     std::string message;
     std::string qualityLabel() const;
 };
@@ -57,6 +58,10 @@ public:
     NavInfo fetchNav();
     VideoInfo fetchVideo(const std::string& bvid);
     AudioStreamInfo resolveAudio(const std::string& bvid, long long cid, int qualityId);
+
+    // settings.json 里的其它键（与 Java 版共用），例如 audio_quality
+    std::string getSetting(const std::string& key) const;
+    bool setSetting(const std::string& key, const std::string& value);
 
     static std::string parseBvid(const std::string& input);
 

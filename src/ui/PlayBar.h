@@ -14,6 +14,10 @@ struct PlayBarData {
     int mode = 1;  // 0=SEQUENTIAL 1=REPEAT_ALL 2=REPEAT_ONE 3=SHUFFLE
     std::string title = "还没有在播放";
     std::string artist = "选一个歌单，或粘贴 BV 号";
+    // 在线曲目才有音质档位
+    bool showQuality = false;
+    int qualityId = 0;  // 0=自动，其它为 B 站音质 id（30280/30232/30216/30251/30250）
+    std::string qualityLabel = "自动";
 };
 
 struct PlayBarActions {
@@ -31,6 +35,8 @@ struct PlayBarActions {
     bool openSleepTimer = false;
     bool connectDevice = false;
     bool download = false;
+    bool qualitySelected = false;
+    int qualityId = 0;
 };
 
 // 底部播放条（76px）：当前曲目 / 控制 + 进度 / 音量 + 输出设备 / 定时 / 队列。

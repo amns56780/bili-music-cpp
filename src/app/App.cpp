@@ -49,6 +49,37 @@ std::string qualityLabel(int qualityId) {
     }
 }
 
+std::string qualityKeyForId(int qualityId) {
+    switch (qualityId) {
+        case 30280: return "Q192";
+        case 30232: return "Q132";
+        case 30216: return "Q64";
+        case 30251: return "HIRES";
+        case 30250: return "DOLBY";
+        default: return "AUTO";
+    }
+}
+
+int qualityIdForKey(const std::string& key) {
+    if (key == "Q192") return 30280;
+    if (key == "Q132") return 30232;
+    if (key == "Q64") return 30216;
+    if (key == "HIRES") return 30251;
+    if (key == "DOLBY") return 30250;
+    return 0;
+}
+
+std::string qualityNameForId(int qualityId) {
+    switch (qualityId) {
+        case 30280: return "192K";
+        case 30232: return "132K";
+        case 30216: return "64K";
+        case 30251: return "Hi-Res";
+        case 30250: return "杜比";
+        default: return "自动";
+    }
+}
+
 std::string formatModeName(int mode) {
     switch (mode) {
         case 0: return "顺序播放";
@@ -65,6 +96,7 @@ void App::init(GLFWwindow* window) {
     Ui::InitStyle();
     Ui::InitFonts();
     bili_.init();
+    qualityId_ = qualityIdForKey(bili_.getSetting("audio_quality"));
 
     std::string engineError;
     if (!engine_.init(&engineError)) {
@@ -141,8 +173,14 @@ void App::startOnlinePlayFor(long long songId, const std::string& bvid, long lon
     playingTitle_ = title;
     playingArtist_ = artist;
     pendingSongId_ = songId;
-    setStatus("正在取流：" + title + "（" + bvid + "）");
-    std::thread([this, songId, bvid, cid, title, artist]() {
+    currentIsOnline_ = true;
+    curBvid_ = bvid;
+    curCid_ = cid;
+    stallWatchStartTick_ = GetTickCount64();
+    backupIndex_ = 0;
+    setStatus("正在取流：" + title + "（" + bvid + "，音质 " + qualityNameForId(qualityId_) + "）");
+    const int qualityIdSnapshot = qualityId_;
+    std::thread([this, songId, bvid, cid, title, artist, qualityIdSnapshot]() {
         AsyncEvent event;
         event.kind = AsyncEvent::Kind::Play;
         event.songId = songId;
@@ -150,17 +188,20 @@ void App::startOnlinePlayFor(long long songId, const std::string& bvid, long lon
         event.cid = cid;
         event.title = title;
         event.artist = artist;
-        const bili::AudioStreamInfo stream = bili_.resolveAudio(bvid, cid, 0);
+        const bili::AudioStreamInfo stream = bili_.resolveAudio(bvid, cid, qualityIdSnapshot);
         event.ok = stream.ok;
         event.url = stream.url;
         event.qualityId = stream.qualityId;
         event.downgraded = stream.downgraded;
+        event.backupUrls = stream.backupUrls;
+        event.deadlineEpochSeconds = stream.deadlineEpochSeconds;
         event.message = stream.message;
         postAsync(std::move(event));
     }).detach();
 }
 
 void App::startOnlinePlay(const StoredSong& song) {
+    stallRetries_ = 0;
     if (song.bvid.empty() || song.cid <= 0) {
         setStatus("「" + song.title + "」缺少 bvid/cid，无法在线取流", true);
         return;
@@ -206,6 +247,8 @@ void App::playSongById(long long songId) {
     playingTitle_ = song->title;
     playingArtist_ = song->artist;
     if (!song->localPath.empty()) {
+        currentIsOnline_ = false;
+        stallWatchStartTick_ = 0;
         std::string error;
         if (engine_.playPath(utf8ToWide(song->localPath), &error)) {
             engine_.setVolume(volume_);
@@ -279,6 +322,47 @@ void App::syncPlaybackState() {
     playing_ = engine_.ready() && engine_.isPlaying();
     engine_.pumpVolume();
     volume_ = engine_.volume();
+    checkPlaybackStall();
+}
+
+void App::checkPlaybackStall() {
+    if (!currentIsOnline_) return;
+    if (stallWatchStartTick_ == 0) return;
+    if (positionMs_ > 800.0) {  // 已经开始正常出声，停止观察
+        stallWatchStartTick_ = 0;
+        return;
+    }
+    if (GetTickCount64() - stallWatchStartTick_ < 6000) return;
+    stallWatchStartTick_ = 0;
+    if (stallRetries_ >= 2) {
+        setStatus("在线播放失败：主地址和备用地址都没能出声", true);
+        return;
+    }
+    ++stallRetries_;
+    if (backupIndex_ + 1 < (int)curBackups_.size()) {
+        ++backupIndex_;
+        std::string error;
+        if (engine_.playUrl(curBackups_[(size_t)backupIndex_], kReferer, kUserAgent, &error)) {
+            setStatus("主地址不可用，已切换备用地址 " + std::to_string(backupIndex_) + "/" +
+                      std::to_string(curBackups_.size()));
+            AppLog::warn("App", "切到备用地址播放：" + error);
+            stallWatchStartTick_ = GetTickCount64();
+            return;
+        }
+    }
+    setStatus("取流地址可能已过期，正在重新取流…");
+    AppLog::warn("App", "播放未出声，重新取流 bvid=" + curBvid_);
+    startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
+}
+
+void App::applyQualitySelection(int qualityId) {
+    qualityId_ = qualityId;
+    bili_.setSetting("audio_quality", qualityKeyForId(qualityId));
+    setStatus("音质档位：" + qualityNameForId(qualityId));
+    if (currentIsOnline_ && !curBvid_.empty() && curCid_ > 0) {
+        pendingSeekMs_ = positionMs_;
+        startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
+    }
 }
 
 void App::pollAsync() {
@@ -316,8 +400,18 @@ void App::pollAsync() {
         if (event.kind == AsyncEvent::Kind::Play) pendingSongId_ = -1;
         playingTitle_ = event.title;
         playingArtist_ = event.artist;
+        curBvid_ = event.bvid;
+        curBackups_ = event.backupUrls;
+        curDeadlineEpoch_ = event.deadlineEpochSeconds;
+        lastStreamQualityId_ = event.qualityId;
+        backupIndex_ = 0;
+        stallWatchStartTick_ = GetTickCount64();
+        if (pendingSeekMs_ >= 0.0) {
+            engine_.seekMs((int64_t)pendingSeekMs_);
+            pendingSeekMs_ = -1.0;
+        }
         std::string message = "在线播放：" + event.title + " · " + qualityLabel(event.qualityId);
-        if (event.downgraded) message += "（档位不可用，已自动降级）";
+        if (event.downgraded) message += "（请求的档位不可用，已自动降级）";
         setStatus(message);
         AppLog::info("App", message + " bvid=" + event.bvid);
     }
@@ -464,6 +558,10 @@ void App::draw() {
     playBarData.mode = mode_;
     playBarData.title = playingTitle_.empty() ? "还没有在播放" : playingTitle_;
     playBarData.artist = playingArtist_.empty() ? "选一个歌单，或粘贴 BV 号" : playingArtist_;
+    playBarData.showQuality = currentIsOnline_;
+    playBarData.qualityId = qualityId_;
+    playBarData.qualityLabel =
+        qualityNameForId(lastStreamQualityId_ > 0 ? lastStreamQualityId_ : qualityId_);
     Ui::PlayBarActions playBarActions;
     Ui::DrawPlayBar(playBarData, &playBarActions, io.DisplaySize.x, playerHeight);
     ImGui::EndChild();
@@ -521,6 +619,7 @@ void App::draw() {
         volume_ = playBarActions.volume;
         engine_.setVolume(volume_);
     }
+    if (playBarActions.qualitySelected) applyQualitySelection(playBarActions.qualityId);
     if (playBarActions.download) setStatus("下载当前曲目：M3 实现");
     if (playBarActions.openQueue) setStatus("播放队列：M4 实现");
     if (playBarActions.openSleepTimer) setStatus("定时关闭：M4 实现");
