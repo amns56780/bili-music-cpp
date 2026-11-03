@@ -327,13 +327,29 @@ bool PlayCircleButton(const char* id, bool playing, float size) {
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddCircleFilled(ImVec2(pos.x + size / 2, pos.y + size / 2), size / 2,
                           hovered ? Colors::BrandHover : Colors::Brand);
-    const uint32_t icon = playing ? Icons::Pause : Icons::PlayArrow;
-    const std::string glyph = Icons::Utf8(icon);
-    const float iconSize = 20.0f;
-    const float width = textWidth(GetFonts().iconBig, iconSize, glyph);
-    drawTextAt(GetFonts().iconBig, iconSize,
-               ImVec2(pos.x + (size - width) / 2, pos.y + iconTextTopForCenter(size, iconSize)),
-               Colors::White, glyph);
+    // 播放/暂停直接用几何图形画：字体图标的光学中心受 bearing/ascent 影响，
+    // 在圆里总会偏一点（用户反馈的「三角形未居中」），几何图形 100% 同心。
+    const ImVec2 center(pos.x + size / 2, pos.y + size / 2);
+    if (playing) {
+        const float barWidth = size * 0.115f;
+        const float barHeight = size * 0.30f;
+        const float gap = size * 0.13f;
+        const float rounding = barWidth * 0.45f;
+        draw->AddRectFilled(ImVec2(center.x - gap / 2 - barWidth, center.y - barHeight / 2),
+                            ImVec2(center.x - gap / 2, center.y + barHeight / 2), Colors::White,
+                            rounding);
+        draw->AddRectFilled(ImVec2(center.x + gap / 2, center.y - barHeight / 2),
+                            ImVec2(center.x + gap / 2 + barWidth, center.y + barHeight / 2),
+                            Colors::White, rounding);
+    } else {
+        // 三角形：重心偏左，视觉上往右挪 ~size*0.03 才像居中
+        const float halfHeight = size * 0.27f;
+        const float halfWidth = size * 0.22f;
+        const float offsetX = size * 0.03f;
+        draw->AddTriangleFilled(ImVec2(center.x - halfWidth + offsetX, center.y - halfHeight),
+                                ImVec2(center.x - halfWidth + offsetX, center.y + halfHeight),
+                                ImVec2(center.x + halfWidth + offsetX, center.y), Colors::White);
+    }
     ImGui::PopID();
     return pressed;
 }
