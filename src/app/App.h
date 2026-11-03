@@ -2,43 +2,49 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "data/LibraryStore.h"
 #include "media/VlcEngine.h"
 
-// C++ 版桌面端的应用层：一个精简的「歌单 + 播放」界面。
-//
-// M1 目标：读 Java 版留下的 playlists.json，列出歌单和本地音乐，双击用内置 VLC 播放本地文件，
-// 底部播放条支持 暂停/停止/进度/音量。在线曲目（需要 WBI 取流）留给 M2。
+struct GLFWwindow;
+
+// C++ 版桌面端的应用层（M1.5）：按 Java 版布局把 UI 拆成
+// 标题栏 / 侧栏 / 歌单页 / 播放条四个模块，这里只负责状态与动作分发。
 class App {
 public:
-    void init();
+    void init(GLFWwindow* window);
     void draw();
     void shutdown();
 
 private:
-    void setupFonts();
-    void setupStyle();
-
-    void drawSidebar();
-    void drawSongList();
-    void drawPlayBar();
-    void playSong(const StoredSong& song);
-    void openLocalFile();
-
+    void syncPlaybackState();
+    void selectPlaylist(long long playlistId);
+    void playSongById(long long songId);
+    void playFirstPlayable();
+    void stepSong(int direction);
     void setStatus(const std::string& text, bool isError = false);
-    const StoredPlaylist* selectedPlaylist() const;
-    int64_t currentPositionMs() const;
-    int64_t currentLengthMs() const;
+    const StoredPlaylist* currentPlaylist() const;
+    std::vector<const StoredSong*> currentSongs() const;
+    const StoredSong* findSong(long long songId) const;
 
+    GLFWwindow* window_ = nullptr;
     LibraryStore store_;
     VlcEngine engine_;
+
+    long long selectedPlaylistId_ = -1;
+    long long playingSongId_ = -1;
+    std::string playingTitle_;
+    std::string playingArtist_;
+    int volume_ = 80;
+    int mode_ = 1;  // 0=顺序 1=列表循环 2=单曲循环 3=随机
+    bool importMenuOpen_ = false;
+
     std::string status_ = "就绪";
     bool statusError_ = false;
 
-    int64_t selectedPlaylistId_ = -1;
-    int64_t playingSongId_ = -1;
-    std::string nowPlayingTitle_;
-    int volume_ = 80;
-    int64_t seekPreviewMs_ = -1;
+    double positionMs_ = 0.0;
+    double durationMs_ = 0.0;
+    bool playing_ = false;
+    bool hasMedia_ = false;
 };

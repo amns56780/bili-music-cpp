@@ -1,0 +1,26 @@
+#pragma once
+
+#include <cstdint>
+
+#include "data/LibraryStore.h"
+
+namespace Ui {
+
+// 侧栏（240px）：账号卡、粘贴链接、我的歌单、底部入口。
+// 对应 Java 版 Sidebar.kt；点击行为通过 [SidebarActions] 回传给 App。
+struct SidebarActions {
+    bool selectPlaylist = false;
+    long long playlistId = -1;
+    bool createPlaylist = false;
+    bool openLocalMusic = false;
+    bool openOutputDevice = false;
+    bool toggleImportMenu = false;
+    bool pasteLink = false;
+    bool login = false;
+};
+
+void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float height,
+                 const std::string& statusText, bool statusIsError, int playlistCount,
+                 SidebarActions* actions);
+
+}  // namespace Ui

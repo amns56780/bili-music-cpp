@@ -37,6 +37,8 @@ int main(int, char**) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    // 无边框窗口：标题栏由 Ui::DrawTitleBar 自己画（和 Java 版一致）
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
 
     // 窗口标题和 Java 版保持一致（"bilimusic"），方便沿用旧的截图/自动化脚本
     GLFWwindow* window = glfwCreateWindow(1240, 860, "bilimusic", nullptr, nullptr);
@@ -46,6 +48,7 @@ int main(int, char**) {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
+    glfwSetWindowSizeLimits(window, 1000, 640, GLFW_DONT_CARE, GLFW_DONT_CARE);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -57,7 +60,7 @@ int main(int, char**) {
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
     App app;
-    app.init();
+    app.init(window);
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();

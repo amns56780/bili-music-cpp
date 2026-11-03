@@ -1,0 +1,402 @@
+#include "ui/Components.h"
+
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
+#include <cstring>
+
+namespace Ui {
+
+namespace {
+
+struct Gradient {
+    ImU32 from;
+    ImU32 to;
+};
+
+// 与 Java 版 BmColors.gradients 一一对应
+constexpr Gradient kGradients[] = {
+    { IM_COL32(0xF0, 0xA4, 0x6B, 255), IM_COL32(0xC4, 0x55, 0x3C, 255) },
+    { IM_COL32(0x3E, 0x7B, 0xD6, 255), IM_COL32(0x1E, 0x3D, 0x6E, 255) },
+    { IM_COL32(0x6B, 0xB6, 0xA0, 255), IM_COL32(0x2C, 0x6A, 0x5A, 255) },
+    { IM_COL32(0x9B, 0x7B, 0xD4, 255), IM_COL32(0x5A, 0x3E, 0x8E, 255) },
+    { IM_COL32(0xE4, 0xC5, 0x6B, 255), IM_COL32(0xA6, 0x7C, 0x2E, 255) },
+    { IM_COL32(0x5D, 0x8C, 0xFF, 255), IM_COL32(0x2B, 0x4C, 0x9E, 255) },
+    { IM_COL32(0xE0, 0x6B, 0x8B, 255), IM_COL32(0x8E, 0x33, 0x50, 255) },
+    { IM_COL32(0x7F, 0xB0, 0x69, 255), IM_COL32(0x3F, 0x6B, 0x33, 255) },
+};
+constexpr int kGradientCount = (int)(sizeof(kGradients) / sizeof(kGradients[0]));
+
+uint32_t fnv1a(const std::string& text) {
+    uint32_t hash = 2166136261u;
+    for (unsigned char ch : text) {
+        hash ^= ch;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+// 解码一个 UTF-8 码点（返回码点和消耗字节数；非法字节按单字节 ASCII 兜底）
+uint32_t decodeUtf8(const std::string& text, size_t offset, size_t* length) {
+    const unsigned char lead = (unsigned char)text[offset];
+    size_t size = 1;
+    uint32_t codepoint = lead;
+    if ((lead & 0xE0) == 0xC0) { size = 2; codepoint = lead & 0x1Fu; }
+    else if ((lead & 0xF0) == 0xE0) { size = 3; codepoint = lead & 0x0Fu; }
+    else if ((lead & 0xF8) == 0xF0) { size = 4; codepoint = lead & 0x07u; }
+    if (offset + size > text.size()) size = text.size() - offset;
+    for (size_t i = 1; i < size; ++i) {
+        const unsigned char continuation = (unsigned char)text[offset + i];
+        codepoint = (codepoint << 6) | (uint32_t)(continuation & 0x3Fu);
+    }
+    *length = size;
+    return codepoint;
+}
+
+bool isEmojiOrSymbol(uint32_t codepoint) {
+    return (codepoint >= 0x1F000 && codepoint <= 0x1FAFF) ||  // emoji
+           (codepoint >= 0x2600 && codepoint <= 0x27BF) ||    // 符号 / dingbats
+           (codepoint >= 0x2B00 && codepoint <= 0x2BFF);
+}
+
+// 变体选择符 / 零宽连接符：本身不可见，直接丢掉，不要顶掉一个音符图标
+bool isInvisibleModifier(uint32_t codepoint) {
+    return (codepoint >= 0xFE00 && codepoint <= 0xFE0F) || codepoint == 0x200D;
+}
+
+// ImGui 用的字体（微软雅黑）没有 emoji 字形，直接渲染会是一串「?」。
+// 显示层把 emoji 换成一个音符，数据本身不动（Java 版仍能看到原始 emoji）。
+std::string sanitizeForDisplay(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    size_t offset = 0;
+    while (offset < text.size()) {
+        size_t length = 0;
+        const uint32_t codepoint = decodeUtf8(text, offset, &length);
+        if (isInvisibleModifier(codepoint)) {
+            // 跳过
+        } else if (isEmojiOrSymbol(codepoint)) {
+            // 用 Material Icons 的音符字形（图标字体合并进了正文/标题字体，肯定有字形）
+            out += Icons::Utf8(Icons::MusicNote);
+        } else {
+            out.append(text, offset, length);
+        }
+        offset += length;
+    }
+    return out;
+}
+
+// 取 UTF-8 字符串的第一个字符（最多 4 字节），emoji/符号退化成音符
+std::string firstUtf8Char(const std::string& text) {
+    if (text.empty()) return {};
+    size_t length = 0;
+    const uint32_t codepoint = decodeUtf8(text, 0, &length);
+    if (isEmojiOrSymbol(codepoint) || isInvisibleModifier(codepoint)) {
+        return Icons::Utf8(Icons::MusicNote);
+    }
+    return text.substr(0, length);
+}
+
+float clampf(float value, float low, float high) {
+    return value < low ? low : (value > high ? high : value);
+}
+
+ImU32 lerpColor(ImU32 from, ImU32 to, float t) {
+    const float ar = (float)((from >> IM_COL32_R_SHIFT) & 0xFF);
+    const float ag = (float)((from >> IM_COL32_G_SHIFT) & 0xFF);
+    const float ab = (float)((from >> IM_COL32_B_SHIFT) & 0xFF);
+    const float br = (float)((to >> IM_COL32_R_SHIFT) & 0xFF);
+    const float bg = (float)((to >> IM_COL32_G_SHIFT) & 0xFF);
+    const float bb = (float)((to >> IM_COL32_B_SHIFT) & 0xFF);
+    return IM_COL32((int)(ar + (br - ar) * t), (int)(ag + (bg - ag) * t), (int)(ab + (bb - ab) * t), 255);
+}
+
+void drawTextAt(ImFont* font, float size, ImVec2 pos, ImU32 color, const std::string& text) {
+    ImGui::GetWindowDrawList()->AddText(font, size, pos, color, text.c_str());
+}
+
+float textWidth(ImFont* font, float size, const std::string& text) {
+    return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x;
+}
+
+}  // namespace
+
+void Place(float x, float y) { ImGui::SetCursorPos(ImVec2(x, y)); }
+
+float MeasureText(ImFont* font, float size, const std::string& text) {
+    return textWidth(font, size, text);
+}
+
+void TextBody(const std::string& text, ImU32 color) {
+    ImGui::PushFont(GetFonts().body);
+    ImGui::PushStyleColor(ImGuiCol_Text, Vec4(color));
+    ImGui::TextUnformatted(text.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+void TextBodySm(const std::string& text, ImU32 color) {
+    ImGui::PushFont(GetFonts().small);
+    ImGui::PushStyleColor(ImGuiCol_Text, Vec4(color));
+    ImGui::TextUnformatted(text.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+void TextLabel(const std::string& text, ImU32 color) {
+    ImGui::PushFont(GetFonts().small);
+    ImGui::PushStyleColor(ImGuiCol_Text, Vec4(color));
+    ImGui::TextUnformatted(text.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+void TextTitle(const std::string& text, ImU32 color) {
+    ImGui::PushFont(GetFonts().title);
+    ImGui::PushStyleColor(ImGuiCol_Text, Vec4(color));
+    ImGui::TextUnformatted(text.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+void TextXl(const std::string& text, ImU32 color) {
+    ImGui::PushFont(GetFonts().xl);
+    ImGui::PushStyleColor(ImGuiCol_Text, Vec4(color));
+    ImGui::TextUnformatted(text.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+void TextNumber(const std::string& text, ImU32 color) {
+    ImGui::PushFont(GetFonts().small);
+    ImGui::PushStyleColor(ImGuiCol_Text, Vec4(color));
+    ImGui::TextUnformatted(text.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+void TextEllipsis(const std::string& rawText, float maxWidth, ImFont* font, ImU32 color, ImVec2 pos) {
+    const std::string text = sanitizeForDisplay(rawText);
+    ImGui::PushFont(font);
+    const float fontSize = ImGui::GetFontSize();
+    const float width = ImGui::CalcTextSize(text.c_str()).x;
+    if (width <= maxWidth) {
+        ImGui::PopFont();
+        drawTextAt(font, fontSize, pos, color, text);
+        return;
+    }
+    const std::string ellipsis = "…";
+    const float ellipsisWidth = ImGui::CalcTextSize(ellipsis.c_str()).x;
+    // 二分找最长可显示前缀（按 UTF-8 边界切）
+    size_t low = 0;
+    size_t high = text.size();
+    size_t best = 0;
+    while (low < high) {
+        size_t mid = (low + high + 1) / 2;
+        while (mid > 0 && mid < text.size() && ((unsigned char)text[mid] & 0xC0) == 0x80) --mid;
+        if (mid == 0) break;
+        const std::string candidate = text.substr(0, mid);
+        if (ImGui::CalcTextSize(candidate.c_str()).x + ellipsisWidth <= maxWidth) {
+            best = mid;
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+        if (low >= high) break;
+    }
+    ImGui::PopFont();
+    if (best == 0) return;
+    drawTextAt(font, fontSize, pos, color, text.substr(0, best) + ellipsis);
+}
+
+bool IconButton(const char* id, uint32_t icon, float size, float iconSize, ImU32 tint,
+                bool active, bool enabled, const char* tooltip) {
+    ImGui::PushID(id);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##icon", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    if (tooltip != nullptr && hovered) ImGui::SetTooltip("%s", tooltip);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (hovered && enabled) {
+        draw->AddCircleFilled(ImVec2(pos.x + size / 2, pos.y + size / 2), size / 2, Colors::Hover);
+    } else if (active) {
+        draw->AddCircleFilled(ImVec2(pos.x + size / 2, pos.y + size / 2), size / 2, Colors::Active);
+    }
+    const ImU32 color = enabled ? tint : IM_COL32(0xA6, 0xA6, 0xAE, 90);
+    const std::string glyph = Icons::Utf8(icon);
+    const float width = textWidth(GetFonts().body, iconSize, glyph);
+    drawTextAt(GetFonts().body, iconSize,
+               ImVec2(pos.x + (size - width) / 2, pos.y + (size - iconSize) / 2), color, glyph);
+    ImGui::PopID();
+    return enabled && pressed;
+}
+
+bool PrimaryButton(const char* id, const std::string& label, uint32_t icon, float height) {
+    ImGui::PushID(id);
+    const ImFont* font = GetFonts().body;
+    const std::string glyph = icon != 0 ? Icons::Utf8(icon) : std::string();
+    const float iconWidth = glyph.empty() ? 0.0f : textWidth(GetFonts().body, 16.0f, glyph) + 7.0f;
+    const float labelWidth = textWidth(GetFonts().body, 14.0f, label);
+    const float width = labelWidth + iconWidth + 28.0f;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##primary", ImVec2(width, height));
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
+                        hovered ? Colors::BrandHover : Colors::Brand, height / 2);
+    float x = pos.x + (width - (labelWidth + iconWidth)) / 2;
+    if (!glyph.empty()) {
+        drawTextAt(GetFonts().body, 16.0f, ImVec2(x, pos.y + (height - 16.0f) / 2), Colors::White, glyph);
+        x += iconWidth;
+    }
+    drawTextAt(GetFonts().body, 14.0f, ImVec2(x, pos.y + (height - 14.0f) / 2), Colors::White, label);
+    (void)font;
+    ImGui::PopID();
+    return pressed;
+}
+
+bool GhostButton(const char* id, const std::string& label, uint32_t icon, float height) {
+    ImGui::PushID(id);
+    const std::string glyph = icon != 0 ? Icons::Utf8(icon) : std::string();
+    const float iconWidth = glyph.empty() ? 0.0f : textWidth(GetFonts().body, 14.0f, glyph) + 6.0f;
+    const float labelWidth = textWidth(GetFonts().body, 14.0f, label);
+    const float width = labelWidth + iconWidth + 26.0f;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##ghost", ImVec2(width, height));
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (hovered) {
+        draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height), Colors::Hover, height / 2);
+    }
+    float x = pos.x + (width - (labelWidth + iconWidth)) / 2;
+    if (!glyph.empty()) {
+        drawTextAt(GetFonts().body, 14.0f, ImVec2(x, pos.y + (height - 14.0f) / 2), Colors::Text2, glyph);
+        x += iconWidth;
+    }
+    drawTextAt(GetFonts().body, 14.0f, ImVec2(x, pos.y + (height - 14.0f) / 2), Colors::Text2, label);
+    ImGui::PopID();
+    return pressed;
+}
+
+bool SidebarAction(const char* id, uint32_t icon, const std::string& label, float height) {
+    ImGui::PushID(id);
+    const float width = ImGui::GetContentRegionAvail().x;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##action", ImVec2(width, height));
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (hovered) {
+        draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height), Colors::Hover, 8.0f);
+    }
+    const std::string glyph = Icons::Utf8(icon);
+    const float iconWidth = textWidth(GetFonts().body, 15.0f, glyph);
+    drawTextAt(GetFonts().body, 15.0f, ImVec2(pos.x + 10.0f, pos.y + (height - 15.0f) / 2),
+               Colors::Text2, glyph);
+    drawTextAt(GetFonts().body, 14.0f,
+               ImVec2(pos.x + 10.0f + iconWidth + 10.0f, pos.y + (height - 14.0f) / 2), Colors::Text2, label);
+    ImGui::PopID();
+    return pressed;
+}
+
+bool PlayCircleButton(const char* id, bool playing, float size) {
+    ImGui::PushID(id);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##play", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddCircleFilled(ImVec2(pos.x + size / 2, pos.y + size / 2), size / 2,
+                          hovered ? Colors::BrandHover : Colors::Brand);
+    const uint32_t icon = playing ? Icons::Pause : Icons::PlayArrow;
+    const std::string glyph = Icons::Utf8(icon);
+    const float iconSize = 20.0f;
+    const float width = textWidth(GetFonts().iconBig, iconSize, glyph);
+    drawTextAt(GetFonts().iconBig, iconSize,
+               ImVec2(pos.x + (size - width) / 2, pos.y + (size - iconSize) / 2), Colors::White, glyph);
+    ImGui::PopID();
+    return pressed;
+}
+
+SliderResult ThinSlider(const char* id, float* value, float width, float height, float barHeight,
+                        ImU32 barColor) {
+    SliderResult result;
+    ImGui::PushID(id);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##slider", ImVec2(width, height));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+    if (hovered || active) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    if (active) {
+        const float ratio = (ImGui::GetIO().MousePos.x - pos.x) / (width > 0 ? width : 1);
+        *value = clampf(ratio, 0.0f, 1.0f);
+        result.changed = true;
+    }
+    if (ImGui::IsItemDeactivated()) result.finished = true;
+
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float centerY = pos.y + height / 2;
+    const float x1 = pos.x + width;
+    draw->AddRectFilled(ImVec2(pos.x, centerY - barHeight / 2), ImVec2(x1, centerY + barHeight / 2),
+                        Colors::TrackBar, barHeight / 2);
+    const float played = pos.x + width * clampf(*value, 0.0f, 1.0f);
+    if (played > pos.x + 0.5f) {
+        draw->AddRectFilled(ImVec2(pos.x, centerY - barHeight / 2), ImVec2(played, centerY + barHeight / 2),
+                            barColor, barHeight / 2);
+    }
+    if (hovered || active) {
+        draw->AddCircleFilled(ImVec2(played, centerY), 5.0f, Colors::White);
+    }
+    ImGui::PopID();
+    return result;
+}
+
+void CoverPlaceholder(const std::string& seed, ImVec2 pos, float size, float radius) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const Gradient& gradient = kGradients[seed.empty() ? 0 : (int)(fnv1a(seed) % (uint32_t)kGradientCount)];
+    // ImGui 没有「圆角渐变」的现成 API：按 2px 一条横带自己画，
+    // 每条的左右内缩量用圆角半径的圆弧公式算，视觉上和圆角矩形渐变一致。
+    const int steps = std::max(8, (int)(size / 2.0f));
+    const float r = std::max(0.0f, std::min(radius, size / 2.0f));
+    for (int i = 0; i < steps; ++i) {
+        const float t0 = (float)i / (float)steps;
+        const float t1 = (float)(i + 1) / (float)steps;
+        const float y0 = pos.y + size * t0;
+        const float y1 = pos.y + size * t1;
+        float inset = 0.0f;
+        if (r > 0.0f) {
+            const float topDy = r - size * t0;
+            if (topDy > 0.0f) inset = std::max(inset, r - std::sqrt(std::max(0.0f, r * r - topDy * topDy)));
+            const float bottomDy = r - size * (1.0f - t1);
+            if (bottomDy > 0.0f) inset = std::max(inset, r - std::sqrt(std::max(0.0f, r * r - bottomDy * bottomDy)));
+        }
+        draw->AddRectFilled(ImVec2(pos.x + inset, y0), ImVec2(pos.x + size - inset, y1 + 0.5f),
+                            lerpColor(gradient.from, gradient.to, (t0 + t1) / 2.0f));
+    }
+    const std::string initial = firstUtf8Char(seed);
+    const std::string text = initial.empty() ? "♪" : initial;
+    ImFont* font = size >= 80.0f ? GetFonts().xl : GetFonts().body;
+    const float fontSize = size >= 80.0f ? size * 0.36f : 14.0f;
+    const float width = textWidth(font, fontSize, text);
+    drawTextAt(font, fontSize,
+               ImVec2(pos.x + (size - width) / 2, pos.y + (size - fontSize) / 2),
+               IM_COL32(255, 255, 255, 235), text);
+}
+
+void TagChip(const std::string& text, ImVec2 pos) {
+    ImFont* font = GetFonts().small;
+    const float width = textWidth(font, 12.0f, text);
+    const ImVec2 end = ImVec2(pos.x + width + 16.0f, pos.y + 22.0f);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(pos, end, Colors::TagBg, 4.0f);
+    drawTextAt(font, 12.0f, ImVec2(pos.x + 8.0f, pos.y + 5.0f), Colors::Text2, text);
+}
+
+void DividerLine(float x0, float x1, float y) {
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(x0, y), ImVec2(x1, y), Colors::Divider, 1.0f);
+}
+
+}  // namespace Ui

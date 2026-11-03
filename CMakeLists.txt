@@ -43,6 +43,12 @@ set(APP_SOURCES
     src/app/App.cpp
     src/media/VlcEngine.cpp
     src/data/LibraryStore.cpp
+    src/ui/Theme.cpp
+    src/ui/Components.cpp
+    src/ui/TitleBar.cpp
+    src/ui/Sidebar.cpp
+    src/ui/PlaylistPage.cpp
+    src/ui/PlayBar.cpp
 )
 
 if (BILIMUSIC_CONSOLE)
@@ -62,5 +68,13 @@ endif()
 
 if (WIN32)
     # comdlg32 = 打开文件对话框；shell32 / ole32 留给后续托盘与拖放
-    target_link_libraries(bilimusic PRIVATE comdlg32 shell32 ole32)
+    target_link_libraries(bilimusic PRIVATE comdlg32 shell32 ole32 user32 gdi32)
 endif()
+
+# 图标字体在运行时加载：复制到 exe 旁边的 assets/（和 Java 版把资源打进 jar 等价）
+add_custom_command(TARGET bilimusic POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:bilimusic>/assets"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/icons/MaterialIcons-Regular.ttf"
+            "$<TARGET_FILE_DIR:bilimusic>/assets/MaterialIcons-Regular.ttf"
+    COMMENT "Copying icon font next to the executable")

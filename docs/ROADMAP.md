@@ -12,6 +12,15 @@
 - [x] 本地文件播放 / 进度显示 / seek / 音量（已实测：本地音乐 38 首，双击播放进度正常推进）
 - [x] 静态链接 MinGW 运行时（免 libstdc++-6.dll 等依赖，单 exe 可直接启动）
 
+## M1.5 · UI 与模块化组件（已完成）
+
+- [x] 无边框自绘标题栏（拖动 / 双击最大化 / 最小化 / 最大化 / 还原 / 关闭）
+- [x] 侧栏 / 歌单页 / 播放条三个页面模块，布局尺寸与 Java 版 BmDimens 对齐
+- [x] 可复用控件库：IconButton、PrimaryButton、GhostButton、SidebarAction、PlayCircleButton、ThinSlider、CoverPlaceholder、TagChip
+- [x] Material Icons 字体合并进正文字体，按钮图标与 Java 版对应
+- [x] 播放模式按钮、上一首/下一首、进度拖动、音量拖动已接到 libVLC
+- [x] emoji 标题显示降级（替换成音符图标，数据不动）
+
 ## M2 · B 站接口与在线播放
 
 从 Kotlin 版 `shared/` 1:1 移植：

@@ -20,14 +20,6 @@ std::string wideToUtf8(const std::wstring& text) {
     return out;
 }
 
-std::wstring utf8ToWide(const std::string& text) {
-    if (text.empty()) return {};
-    int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0);
-    std::wstring out((size_t)size, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), out.data(), size);
-    return out;
-}
-
 std::wstring parentDir(const std::wstring& path) {
     size_t pos = path.find_last_of(L"\\/");
     if (pos == std::wstring::npos) return L".";
