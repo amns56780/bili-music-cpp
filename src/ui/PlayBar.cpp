@@ -114,7 +114,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     // 既不会像之前那样贴着播放键显得偏上，也不会沉到最底部和进度条挤在一起。
     const float controlsCenterY = 8.0f + 19.0f;       // 播放键 / 控制行中心（局部 y=27）
     const float progressCenterY = 50.0f + 7.0f;       // 进度条中心（局部 y=57）
-    const float rightCenterY = (controlsCenterY + progressCenterY) * 0.5f;  // 42
+    const float rightCenterY = (controlsCenterY + progressCenterY) * 0.5f - 4.0f;  // 38（用户要求再上移一点）
     draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 6.0f), Colors::Text2,
                   volumeIcon.c_str());
     static bool volumeDragging = false;
