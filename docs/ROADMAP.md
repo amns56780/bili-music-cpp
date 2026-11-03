@@ -1,0 +1,65 @@
+# 路线图（C++ 桌面版）
+
+目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端；功能对齐后可以作为轻量、免 JRE 的分发版本。
+
+## M1 · 工程骨架 + 播放内核（已完成）
+
+- [x] CMake + MinGW-w64（w64devkit）构建，不依赖 Qt / vcpkg / Visual Studio
+- [x] 依赖源码内嵌：Dear ImGui 1.93.0、GLFW 3.5.1、nlohmann/json 3.12.0
+- [x] 深色 UI 骨架：左侧歌单栏、右侧曲目表、底部播放条（暂停/停止/进度/音量）
+- [x] 读取 Java 版数据文件 `%USERPROFILE%\.bilimusic\playlists.json`（字段完全兼容）
+- [x] libVLC 运行时加载：优先 `exe 所在目录\vlc`，其次 `BILIMUSIC_VLC_DIR`、系统安装的 VLC
+- [x] 本地文件播放 / 进度显示 / seek / 音量（已实测：本地音乐 38 首，双击播放进度正常推进）
+- [x] 静态链接 MinGW 运行时（免 libstdc++-6.dll 等依赖，单 exe 可直接启动）
+
+## M2 · B 站接口与在线播放
+
+从 Kotlin 版 `shared/` 1:1 移植：
+
+- [ ] WBI 签名（`WbiSigner.kt`，MD5 + 混淆表）
+- [ ] Cookie 登录（扫码登录 + 手动粘贴 Cookie）、Cookie 持久化
+- [ ] 取流接口（`/x/player/wbi/playurl`）+ 音质降级链（192K → 132K → 64K → Hi-Res/杜比）
+- [ ] 视频详情（拿 cid）、URL 过期重取（5 分钟安全余量）
+- [ ] 在线播放：libvlc 需要带 `:http-referrer=https://www.bilibili.com/` 和 UA
+
+## M3 · 歌单导入与管理
+
+- [ ] 收藏夹列表 / 稍后再看 / UP主投稿 / 合集（season）导入，实时进度条
+- [ ] 歌单新建 / 重命名 / 删除 / 排序（重名规则对齐 Java 版：覆盖 / 自动重命名 (n) / 取消）
+- [ ] 曲目多选：复制到歌单 / 移动到歌单 / 删除
+- [ ] 离线缓存：下载当前曲目到 ~/.bilimusic/downloads/，离线优先播放
+
+## M4 · 体验对齐
+
+- [ ] 封面图（网络图 + 自定义本地图）
+- [ ] 沉浸模式（全屏 / 时间日期 / 律动可视化 / 背景模糊）
+- [ ] 播放模式（顺序 / 列表循环 / 单曲循环 / 随机，固定 seed 洗牌）
+- [ ] 定时关闭、系统托盘、全局快捷键（空格 / [ / ]）、防熄屏
+- [ ] 本地音乐扫描（读取系统媒体库或扫描目录）
+
+## M5 · 打包分发
+
+- [ ] 内置 VLC（复用 Java 版打包脚本的 vlc/ 目录，369 文件 / 135MB）
+- [ ] 免安装 zip + 自解压安装器（7z SFX，思路同 Java 版 desktop/tools/build-exe.ps1）
+- [ ] 体积/内存/启动时间对比 Java 版，记录在 README
+
+## 功能对等清单（用来判断什么时候能替换 Java 版）
+
+| 能力 | Java 版 | C++ M1 | 目标里程碑 |
+| --- | --- | --- | --- |
+| 本地音乐播放 | 支持 | 支持 | M1 |
+| 在线播放（WBI 取流） | 支持 | 待做 | M2 |
+| 扫码/Cookie 登录 | 支持 | 待做 | M2 |
+| 四种来源导入歌单 | 支持 | 待做 | M3 |
+| 歌单重名处理 | 支持 | 待做 | M3 |
+| 离线缓存 | 支持 | 待做 | M3 |
+| 沉浸模式 / 封面 / 歌词 | 支持 | 待做 | M4 |
+| 托盘 / 全局快捷键 / 防熄屏 | 支持 | 待做 | M4 |
+| 打包体积/内存 | Working Set 约 430MB | 待测 | M5 |
+
+## 技术决策记录
+
+- **UI 用 Dear ImGui 而不是 Qt**：M1 阶段优先「零第三方 SDK、构建简单、立刻能迭代」。Qt 需要安装 Qt SDK（几 GB）或 vcpkg 编译数小时，对当前目标不划算。ImGui 外观可定制到接近深色音乐播放器，但复杂动画/富文本能力有限；如果后续需要在 UI 上投入更多，可以评估迁移到 Qt6（业务层与 UI 解耦）。
+- **libVLC 动态加载（LoadLibrary + GetProcAddress）**：不依赖 VLC SDK 头文件/import lib，打包时只要带 libvlc.dll + libvlccore.dll + plugins 即可；后续要完整 API（事件、输出设备）时可换成官方 vlc/*.h。
+- **数据格式与 Java 版共用**：playlists.json 直接读，两个版本可以来回切换、不打架。
+- **MinGW 静态链接**：避免安装版还要附带 libstdc++/libgcc/winpthread 三个 DLL。
