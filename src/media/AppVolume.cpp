@@ -16,6 +16,16 @@
 
 #include "util/AppLog.h"
 
+// mingw-w64 的 endpointvolume.h 只前向声明了 IAudioMeterInformation，没有接口定义，
+// 这里按 COM ABI 自己补一个（只用 GetPeakValue，vtable 顺序与官方一致）。
+struct IAudioMeterInformation : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE GetPeakValue(float* pfPeak) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetMeteringChannelCount(UINT* pnChannelCount) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetChannelsPeakValues(UINT32 u32ChannelCount,
+                                                           float* afPeakValues) = 0;
+    virtual HRESULT STDMETHODCALLTYPE QueryHardwareSupport(DWORD* pdwHardwareSupportMask) = 0;
+};
+
 namespace media {
 
 namespace {
@@ -31,6 +41,8 @@ const GUID kIidAudioSessionControl2 = {
     0xBFB7FF88, 0x7239, 0x4FC9, {0x8F, 0xA2, 0x07, 0xC9, 0x50, 0xBE, 0x9C, 0x6D}};
 const GUID kIidSimpleAudioVolume = {
     0x87CE5498, 0x68D6, 0x44E5, {0x92, 0x15, 0x6D, 0xA4, 0x7E, 0xF8, 0x83, 0xD8}};
+const GUID kIidAudioMeterInformation = {
+    0xC02216F6, 0x8C67, 0x4B5B, {0x9D, 0x00, 0xD0, 0x08, 0xE7, 0x3E, 0x00, 0x64}};
 
 template <typename T>
 void safeRelease(T*& pointer) {
@@ -70,6 +82,7 @@ bool AppVolume::init() {
 }
 
 void AppVolume::shutdown() {
+    safeRelease(meter_);
     safeRelease(sessionVolume_);
     safeRelease(sessionManager_);
     safeRelease(device_);
@@ -108,6 +121,11 @@ bool AppVolume::ensureSession() {
                 if (SUCCEEDED(control2->QueryInterface(kIidSimpleAudioVolume, (void**)&simple)) &&
                     simple != nullptr) {
                     sessionVolume_ = simple;
+                    IAudioMeterInformation* meter = nullptr;
+                    if (SUCCEEDED(control2->QueryInterface(kIidAudioMeterInformation, (void**)&meter)) &&
+                        meter != nullptr) {
+                        meter_ = meter;
+                    }
                 }
             }
             control2->Release();
@@ -140,6 +158,13 @@ int AppVolume::volume() const {
     float level = 0.0f;
     if (FAILED(sessionVolume_->GetMasterVolume(&level))) return -1;
     return (int)std::lround(level * 100.0f);
+}
+
+float AppVolume::peak() const {
+    if (meter_ == nullptr) return -1.0f;
+    float value = 0.0f;
+    if (FAILED(meter_->GetPeakValue(&value))) return -1.0f;
+    return value;
 }
 
 }  // namespace media

@@ -6,6 +6,7 @@ struct IMMDevice;
 struct IMMDeviceEnumerator;
 struct IAudioSessionManager2;
 struct ISimpleAudioVolume;
+struct IAudioMeterInformation;
 
 namespace media {
 
@@ -26,6 +27,7 @@ public:
     // percent: 0..100；force=true 时即使数值没变也强制下发（防止 VLC 自己把会话音量改回去）
     bool setVolume(int percent, bool force = false);
     int volume() const;  // 读回当前会话音量（0..100）；不可用时返回 -1
+    float peak() const;  // 当前音频会话峰值（0..1），用于自检「断断续续」
 
 private:
     bool ensureSession();
@@ -35,6 +37,7 @@ private:
     IMMDevice* device_ = nullptr;
     IAudioSessionManager2* sessionManager_ = nullptr;
     ISimpleAudioVolume* sessionVolume_ = nullptr;
+    IAudioMeterInformation* meter_ = nullptr;
     int lastVolume_ = -1;
     uint64_t lastRetryTick_ = 0;
 };

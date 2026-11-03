@@ -1,5 +1,8 @@
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <thread>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -15,6 +18,8 @@
 
 #include "app/App.h"
 #include "bili/BiliService.h"
+#include "media/AppVolume.h"
+#include "media/VlcEngine.h"
 #include "ui/WindowFrame.h"
 
 namespace {
@@ -29,9 +34,107 @@ void glfwErrorCallback(int code, const char* description) {
     std::fputc('\n', stderr);
 }
 
+
+std::wstring utf8ToWidePath(const std::string& text) {
+    if (text.empty()) return {};
+    const int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0);
+    std::wstring out((size_t)size, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), out.data(), size);
+    return out;
+}
+
+// 暂停/恢复的客观自检：用 WASAPI 峰值表采样，统计「静音采样点」比例。
+// 用法：bilimusic.exe --test-pause <本地音频路径>
+//       bilimusic.exe --test-pause-online BV1xx411c7mD
+int runPauseTest(const std::string& mode, const std::string& target) {
+    const bool online = mode == "--test-pause-online";
+    const bool usePlayResume = std::getenv("BILIMUSIC_RESUME_PLAY") != nullptr;
+    const bool skipVolume = std::getenv("BILIMUSIC_TEST_NO_VOLUME") != nullptr;
+    const char* referrer = "https://www.bilibili.com/";
+    const char* userAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36";
+
+    VlcEngine engine;
+    std::string error;
+    if (!engine.init(&error)) {
+        std::printf("engine init failed: %s\n", error.c_str());
+        return 1;
+    }
+    media::AppVolume volume;
+    volume.init();
+
+    bool played = false;
+    std::string title;
+    if (online) {
+        bili::BiliService service;
+        service.init();
+        const std::string bvid = bili::BiliService::parseBvid(target);
+        const bili::VideoInfo video = service.fetchVideo(bvid);
+        if (!video.ok) {
+            std::printf("view failed: %s\n", video.message.c_str());
+            return 2;
+        }
+        const bili::AudioStreamInfo stream = service.resolveAudio(bvid, video.cid, 0);
+        if (!stream.ok) {
+            std::printf("resolve failed: %s\n", stream.message.c_str());
+            return 3;
+        }
+        title = video.title;
+        played = engine.playUrl(stream.url, referrer, userAgent, &error);
+    } else {
+        title = target;
+        played = engine.playPath(utf8ToWidePath(target), &error);
+    }
+    std::printf("play ok=%d err=%s title=%s\n", played ? 1 : 0, error.c_str(), title.c_str());
+    if (!played) return 4;
+
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    // 先调用一次拿到音频会话（峰值表挂在会话上）；后面是否持续写音量由 skipVolume 控制
+    volume.setVolume(80, true);
+
+    auto sample = [&](const char* tag, int seconds) {
+        int samples = 0;
+        int zeros = 0;
+        float maxPeak = 0.0f;
+        for (int i = 0; i < seconds * 20; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (!skipVolume) volume.setVolume(80, true);
+            const float peak = volume.peak();
+            if (peak < 0.0f) continue;
+            ++samples;
+            if (peak < 0.0005f) ++zeros;
+            if (peak > maxPeak) maxPeak = peak;
+        }
+        std::printf("%s: samples=%d silent=%d (%.1f%%) maxPeak=%.4f\n", tag, samples, zeros,
+                    samples > 0 ? 100.0 * zeros / samples : 0.0, maxPeak);
+    };
+
+    sample("baseline", 3);
+    engine.togglePause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    if (usePlayResume) {
+        engine.resumeByPlay();
+    } else {
+        engine.togglePause();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+    sample("after-resume", 6);
+    std::printf("resume-mode=%s skipVolume=%d\n", usePlayResume ? "play" : "set_pause",
+                skipVolume ? 1 : 0);
+    engine.shutdown();
+    volume.shutdown();
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 2 && (std::string(argv[1]) == "--test-pause" ||
+                     std::string(argv[1]) == "--test-pause-online")) {
+        return runPauseTest(argv[1], argv[2]);
+    }
+
     // 控制台自检：.ilimusic.exe --check-bili BV1xx411c7mD
     // 用来在不启动 UI 的情况下验证 Cookie / WBI 签名 / 取流链路。
     if (argc > 2 && std::string(argv[1]) == "--check-bili") {

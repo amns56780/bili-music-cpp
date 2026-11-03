@@ -32,6 +32,7 @@ public:
                  const std::string& userAgent, std::string* error);                  // 网络流
 
     void togglePause();
+    void resumeByPlay();  // 用 libvlc_media_player_play 恢复（自检对比用）
     void pause();
     void resume();
     void stop();

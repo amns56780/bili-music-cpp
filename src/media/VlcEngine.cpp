@@ -144,8 +144,12 @@ bool VlcEngine::init(std::string* error) {
     if (!ok) { delete api; return false; }
 
     // 和 Java 版一致：不做视频、安静启动、只播音频
-    const char* args[] = {"--no-video", "--quiet", "--intf=dummy"};
-    instance_ = api->libvlc_new(3, args);
+    // 自检时可以用 BILIMUSIC_VLC_VERBOSE=1 打开 VLC 日志（排查暂停/恢复、aout 重建）
+    std::vector<const char*> args = {"--no-video", "--quiet", "--intf=dummy"};
+    if (std::getenv("BILIMUSIC_VLC_VERBOSE") != nullptr) {
+        args = {"--no-video", "--verbose=2", "--intf=dummy"};
+    }
+    instance_ = api->libvlc_new((int)args.size(), args.data());
     if (!instance_) {
         delete api;
         appendError(error, "libvlc_new 失败（VLC 内核无法初始化）");
@@ -233,6 +237,10 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
         appendError(error, "无法打开网络地址");
         return false;
     }
+    // 网络流缓存：默认 1000ms 在「暂停 → 恢复」时容易把缓冲耗干，恢复瞬间断断续续。
+    // 加大到 5s 让恢复后先有足够的缓冲；http-reconnect 让连接断掉时自动重连。
+    api_->libvlc_media_add_option(media_, ":network-caching=3000");
+    api_->libvlc_media_add_option(media_, ":http-reconnect=true");
     if (!referrer.empty()) {
         api_->libvlc_media_add_option(media_, (":" + std::string("http-referrer=") + referrer).c_str());
     }
@@ -258,6 +266,11 @@ void VlcEngine::pause() {
 
 void VlcEngine::resume() {
     if (api_ && player_) api_->libvlc_media_player_set_pause(player_, 0);
+}
+
+void VlcEngine::resumeByPlay() {
+    // libvlc_media_player_play 对已暂停的播放器等价于恢复播放，不重建 aout
+    if (api_ && player_) api_->libvlc_media_player_play(player_);
 }
 
 void VlcEngine::togglePause() {

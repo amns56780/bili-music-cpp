@@ -41,7 +41,11 @@
   - [x] 音质选择：指定档位匹配 → 192K/132K/64K 降级链 → 最高带宽兜底；durl 兜底
   - [x] 在线播放：libVLC + `http-referrer`/`http-user-agent`（否则 bilivideo 403）
   - [x] 双击在线曲目播放、上一首/下一首自动取流、粘贴 BV 号/链接弹窗播放
-  - [ ] M2 剩余：扫码登录（QR）、音质档位 UI、备用 URL 自动切换、URL 过期自动重取
+  - [x] 在线流暂停/恢复防断续：`:network-caching=3000` + `:http-reconnect=true`
+  - 原因：VLC 默认网络缓存只有 1s，暂停时缓存被耗干，恢复瞬间要重连 mcdn 拉数据 → 断断续续
+  - 自检工具：`bilimusic.exe --test-pause <本地音频>` / `--test-pause-online BV1xx`
+    （用 WASAPI 峰值表每 50ms 采样，统计恢复后的静音采样比例；修复前 ~11%，修复后 ~0.8%，本地文件 0%）
+- [ ] M2 剩余：扫码登录（QR）、音质档位 UI、备用 URL 自动切换、URL 过期自动重取
 - [ ] M3：歌单导入与管理（收藏夹 / 稍后再看 / UP主投稿 / 合集）
 - [ ] M4：沉浸模式 / 封面 / 歌词 / 托盘 / 快捷键
 - [ ] M5：打包（内置 VLC + 免安装 zip + 安装器）
