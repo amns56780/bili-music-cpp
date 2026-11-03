@@ -331,9 +331,11 @@ bool PlayCircleButton(const char* id, bool playing, float size) {
     // 在圆里总会偏一点（用户反馈的「三角形未居中」），几何图形 100% 同心。
     const ImVec2 center(pos.x + size / 2, pos.y + size / 2);
     if (playing) {
-        const float barWidth = size * 0.115f;
-        const float barHeight = size * 0.30f;
-        const float gap = size * 0.13f;
+        // 参考 Java 版：38dp 圆里放 20dp 的 Material Pause 图标，
+        // 实际字形是两根 ~3.3dp 宽、~11.7dp 高的竖条，间距 ~3.3dp
+        const float barWidth = size * 0.087f;
+        const float barHeight = size * 0.31f;
+        const float gap = size * 0.087f;
         const float rounding = barWidth * 0.45f;
         draw->AddRectFilled(ImVec2(center.x - gap / 2 - barWidth, center.y - barHeight / 2),
                             ImVec2(center.x - gap / 2, center.y + barHeight / 2), Colors::White,
@@ -342,10 +344,11 @@ bool PlayCircleButton(const char* id, bool playing, float size) {
                             ImVec2(center.x + gap / 2 + barWidth, center.y + barHeight / 2),
                             Colors::White, rounding);
     } else {
-        // 三角形：重心偏左，视觉上往右挪 ~size*0.03 才像居中
-        const float halfHeight = size * 0.27f;
-        const float halfWidth = size * 0.22f;
-        const float offsetX = size * 0.03f;
+        // 三角形：对齐 Java 版 20dp PlayArrow 的字形尺寸（约 9.2 x 11.7dp），
+        // 重心偏左，视觉上往右挪 ~size*0.025 才像居中
+        const float halfHeight = size * 0.155f;
+        const float halfWidth = size * 0.121f;
+        const float offsetX = size * 0.025f;
         draw->AddTriangleFilled(ImVec2(center.x - halfWidth + offsetX, center.y - halfHeight),
                                 ImVec2(center.x - halfWidth + offsetX, center.y + halfHeight),
                                 ImVec2(center.x + halfWidth + offsetX, center.y), Colors::White);
