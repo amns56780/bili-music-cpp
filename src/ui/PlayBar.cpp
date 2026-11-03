@@ -110,14 +110,17 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     const std::string volumeIcon =
         Icons::Utf8(data.volume <= 0 ? Icons::VolumeOff
                                      : (data.volume < 50 ? Icons::VolumeDown : Icons::VolumeUp));
-    // 右侧音量组和三个图标都对齐进度条中心线（用户要求：音量条与播放进度条对齐）
-    const float progressCenterY = 50.0f + 7.0f;
-    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, progressCenterY - 6.0f), Colors::Text2,
+    // 右侧音量组和三个图标放在「播放键中心」与「进度条中心」之间（取中间线）：
+    // 既不会像之前那样贴着播放键显得偏上，也不会沉到最底部和进度条挤在一起。
+    const float controlsCenterY = 8.0f + 19.0f;       // 播放键 / 控制行中心（局部 y=27）
+    const float progressCenterY = 50.0f + 7.0f;       // 进度条中心（局部 y=57）
+    const float rightCenterY = (controlsCenterY + progressCenterY) * 0.5f;  // 42
+    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 6.0f), Colors::Text2,
                   volumeIcon.c_str());
     static bool volumeDragging = false;
     static float volumeDraft = 0.8f;
     if (!volumeDragging) volumeDraft = data.volume / 100.0f;
-    ImGui::SetCursorPos(ImVec2(rightLeft + 24.0f, progressCenterY - 7.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 24.0f, rightCenterY - 7.0f));
     float volumeValue = volumeDraft;
     const SliderResult volumeResult = ThinSlider("volume", &volumeValue, 110.0f, 14.0f, 4.0f, Colors::Text2);
     if (volumeResult.changed) {
@@ -135,17 +138,17 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         (int)std::lround(volumeValue * 100.0f) == 0 ? "静音" :
         std::to_string((int)std::lround(volumeValue * 100.0f)) + "%";
     const float volumeTextWidth = MeasureText(GetFonts().small, 13.0f, volumeText);
-    draw->AddText(GetFonts().small, 13.0f, abs(rightLeft + 24.0f + 110.0f + 6.0f + 34.0f - volumeTextWidth, progressCenterY - 4.0f),
+    draw->AddText(GetFonts().small, 13.0f, abs(rightLeft + 24.0f + 110.0f + 6.0f + 34.0f - volumeTextWidth, rightCenterY - 4.0f),
                   Colors::Text3, volumeText.c_str());
-    ImGui::SetCursorPos(ImVec2(rightLeft + 182.0f, progressCenterY - 14.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 182.0f, rightCenterY - 14.0f));
     if (IconButton("output_device", Icons::Headset, 28.0f, 16.0f, Colors::Text2, false, true, "输出设备（M4）")) {
         actions->openOutputDevice = true;
     }
-    ImGui::SetCursorPos(ImVec2(rightLeft + 220.0f, progressCenterY - 14.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 220.0f, rightCenterY - 14.0f));
     if (IconButton("sleep_timer", Icons::Bedtime, 28.0f, 16.0f, Colors::Text2, false, true, "定时关闭（M4）")) {
         actions->openSleepTimer = true;
     }
-    ImGui::SetCursorPos(ImVec2(rightLeft + 258.0f, progressCenterY - 14.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 258.0f, rightCenterY - 14.0f));
     if (IconButton("queue", Icons::PlaylistPlay, 28.0f, 16.0f, Colors::Text2, false, true, "播放队列（M4）")) {
         actions->openQueue = true;
     }
