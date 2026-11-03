@@ -45,6 +45,9 @@ set(APP_SOURCES
     src/media/AppVolume.cpp
     src/data/LibraryStore.cpp
     src/util/AppLog.cpp
+    src/util/Md5.cpp
+    src/net/HttpClient.cpp
+    src/bili/BiliService.cpp
     src/ui/Theme.cpp
     src/ui/Components.cpp
     src/ui/TitleBar.cpp
@@ -71,7 +74,7 @@ endif()
 
 if (WIN32)
     # comdlg32 = 打开文件对话框；shell32 / ole32 留给后续托盘与拖放
-    target_link_libraries(bilimusic PRIVATE comdlg32 shell32 ole32 user32 gdi32)
+    target_link_libraries(bilimusic PRIVATE comdlg32 shell32 ole32 uuid user32 gdi32 winhttp)
 endif()
 
 # 图标字体在运行时加载：复制到 exe 旁边的 assets/（和 Java 版把资源打进 jar 等价）

@@ -116,11 +116,11 @@ void InitFonts() {
     const std::string cjkPath = findChineseFont();
     const std::string iconPath = findAsset(L"MaterialIcons-Regular.ttf");
 
-    addFontWithIcons(g_fonts.body, cjkPath, iconPath, 14.0f, true);
-    addFontWithIcons(g_fonts.small, cjkPath, iconPath, 12.0f, true);
-    addFontWithIcons(g_fonts.title, cjkPath, iconPath, 18.0f, true);
-    addFontWithIcons(g_fonts.xl, cjkPath, iconPath, 30.0f, false);
-    addFontWithIcons(g_fonts.iconBig, iconPath, iconPath, 20.0f, false);
+    addFontWithIcons(g_fonts.body, cjkPath, iconPath, FontSize::Body, true);
+    addFontWithIcons(g_fonts.small, cjkPath, iconPath, FontSize::Small, true);
+    addFontWithIcons(g_fonts.title, cjkPath, iconPath, FontSize::Title, true);
+    addFontWithIcons(g_fonts.xl, cjkPath, iconPath, FontSize::Xl, false);
+    addFontWithIcons(g_fonts.iconBig, iconPath, iconPath, FontSize::IconBig, false);
 }
 
 void InitStyle() {

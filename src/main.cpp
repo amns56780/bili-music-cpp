@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <string>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -13,6 +14,7 @@
 #include "imgui_impl_opengl3.h"
 
 #include "app/App.h"
+#include "bili/BiliService.h"
 #include "ui/WindowFrame.h"
 
 namespace {
@@ -29,7 +31,33 @@ void glfwErrorCallback(int code, const char* description) {
 
 }  // namespace
 
-int main(int, char**) {
+int main(int argc, char** argv) {
+    // 控制台自检：.ilimusic.exe --check-bili BV1xx411c7mD
+    // 用来在不启动 UI 的情况下验证 Cookie / WBI 签名 / 取流链路。
+    if (argc > 2 && std::string(argv[1]) == "--check-bili") {
+        bili::BiliService service;
+        service.init();
+        const bili::NavInfo nav = service.fetchNav();
+        std::printf("nav ok=%d loggedIn=%d uname=%s mid=%lld msg=%s\n", nav.ok ? 1 : 0,
+                    nav.loggedIn ? 1 : 0, nav.userName.c_str(), nav.userId, nav.message.c_str());
+
+        const std::string bvid = bili::BiliService::parseBvid(argv[2]);
+        std::printf("bvid=%s\n", bvid.c_str());
+        if (bvid.empty()) return 2;
+
+        const bili::VideoInfo video = service.fetchVideo(bvid);
+        std::printf("video ok=%d bvid=%s cid=%lld title=%s artist=%s msg=%s\n", video.ok ? 1 : 0,
+                    video.bvid.c_str(), video.cid, video.title.c_str(), video.artist.c_str(),
+                    video.message.c_str());
+        if (!video.ok) return 3;
+
+        const bili::AudioStreamInfo stream = service.resolveAudio(bvid, video.cid, 0);
+        std::printf("stream ok=%d quality=%s downgraded=%d url=%.120s msg=%s\n", stream.ok ? 1 : 0,
+                    stream.qualityLabel().c_str(), stream.downgraded ? 1 : 0, stream.url.c_str(),
+                    stream.message.c_str());
+        return stream.ok ? 0 : 4;
+    }
+
     glfwSetErrorCallback(glfwErrorCallback);
     if (!glfwInit()) {
         return 1;

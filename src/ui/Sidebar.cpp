@@ -56,6 +56,7 @@ void drawPlaylistRow(const ImVec2& origin, const StoredPlaylist& playlist, const
 
 void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float height,
                  const std::string& statusText, bool statusIsError, int playlistCount,
+                 bool loggedIn, const std::string& userName, long long userId,
                  SidebarActions* actions) {
     const float width = Dimens::SidebarWidth;
 
@@ -65,11 +66,20 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     ImDrawList* draw = ImGui::GetWindowDrawList();
 
     // ---------------- 账号卡 ----------------
-    CoverPlaceholder("B", abs(16.0f, 18.0f), 36.0f, 18.0f);
-    draw->AddText(GetFonts().body, 14.0f, abs(62.0f, 22.0f), Colors::Text, "未登录");
-    draw->AddText(GetFonts().small, 12.0f, abs(62.0f, 40.0f), Colors::Text3, "本地播放可用");
+    const std::string avatarSeed = loggedIn && !userName.empty() ? userName : "B";
+    CoverPlaceholder(avatarSeed, abs(16.0f, 18.0f), 36.0f, 18.0f);
+    const std::string displayName = loggedIn ? userName : "未登录";
+    TextEllipsis(displayName, 120.0f, GetFonts().body, Colors::Text, abs(62.0f, 21.0f));
+    const std::string accountSub = loggedIn ? ("UID " + std::to_string(userId)) : "本地播放可用";
+    TextEllipsis(accountSub, 120.0f, GetFonts().small, Colors::Text3, abs(62.0f, 40.0f));
     ImGui::SetCursorPos(ImVec2(width - 10.0f - 64.0f, 20.0f));
-    if (GhostButton("##login", "登录", 0, 28.0f)) actions->login = true;
+    if (GhostButton("##login", loggedIn ? "退出" : "登录", 0, 28.0f)) {
+        if (loggedIn) {
+            actions->logout = true;
+        } else {
+            actions->login = true;
+        }
+    }
 
     // ---------------- 粘贴链接入口 ----------------
     ImGui::SetCursorPos(ImVec2(12.0f, 66.0f));
@@ -80,15 +90,15 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     const ImVec2 linkPos = ImGui::GetItemRectMin();
     draw->AddRectFilled(linkPos, ImVec2(linkPos.x + width - 24.0f, linkPos.y + 32.0f), Colors::Hover, 16.0f);
     const std::string linkIcon = Icons::Utf8(Icons::Link);
-    draw->AddText(GetFonts().small, 14.0f, ImVec2(linkPos.x + 12.0f, linkPos.y + 9.0f), Colors::Text3,
+    draw->AddText(GetFonts().body, 16.0f, ImVec2(linkPos.x + 12.0f, linkPos.y + 8.0f), Colors::Text3,
                   linkIcon.c_str());
-    draw->AddText(GetFonts().small, 12.0f, ImVec2(linkPos.x + 12.0f + 14.0f + 8.0f, linkPos.y + 10.0f),
+    draw->AddText(GetFonts().small, 13.0f, ImVec2(linkPos.x + 12.0f + 16.0f + 8.0f, linkPos.y + 10.0f),
                   Colors::Text3, "粘贴链接 / BV 号播放");
     ImGui::PopID();
     if (linkPressed) actions->pasteLink = true;
 
     // ---------------- 分组标题 ----------------
-    draw->AddText(GetFonts().small, 12.0f, abs(18.0f, 116.0f), Colors::Text3, "我的歌单");
+    draw->AddText(GetFonts().small, 13.0f, abs(18.0f, 116.0f), Colors::Text3, "我的歌单");
     ImGui::SetCursorPos(ImVec2(width - 10.0f - 28.0f, 106.0f));
     if (IconButton("##new_playlist", Icons::Add, 28.0f, 16.0f, Colors::Text2, false, true,
                    "新建歌单（M3 实现）")) {

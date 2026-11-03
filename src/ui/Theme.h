@@ -36,7 +36,7 @@ namespace Dimens {
 inline constexpr float TitleBarHeight = 36.0f;
 inline constexpr float TitleBarButtonWidth = 46.0f;
 inline constexpr float SidebarWidth = 240.0f;
-inline constexpr float PlayerHeight = 76.0f;
+inline constexpr float PlayerHeight = 72.0f;
 inline constexpr float CoverBig = 196.0f;
 inline constexpr float CoverSide = 36.0f;
 inline constexpr float CoverPlayer = 50.0f;
@@ -53,12 +53,21 @@ inline constexpr float RadiusRow = 8.0f;
 inline constexpr float RadiusTag = 4.0f;
 }  // namespace Dimens
 
+// 字号（比 Java 版整体调大一档：正文 16、次要 13、标题 20、大标题 34）
+namespace FontSize {
+inline constexpr float Body = 16.0f;
+inline constexpr float Small = 13.0f;
+inline constexpr float Title = 20.0f;
+inline constexpr float Xl = 34.0f;
+inline constexpr float IconBig = 22.0f;
+}  // namespace FontSize
+
 struct Fonts {
-    ImFont* body = nullptr;      // 14px 正文 + 图标
-    ImFont* small = nullptr;     // 12px 次要信息 + 图标
-    ImFont* title = nullptr;     // 18px 标题 + 图标
-    ImFont* xl = nullptr;        // 30px 大标题
-    ImFont* iconBig = nullptr;   // 20px 纯图标（播放/暂停按钮）
+    ImFont* body = nullptr;      // 16px 正文 + 图标
+    ImFont* small = nullptr;     // 13px 次要信息 + 图标
+    ImFont* title = nullptr;     // 20px 标题 + 图标
+    ImFont* xl = nullptr;        // 34px 大标题
+    ImFont* iconBig = nullptr;   // 22px 纯图标（播放/暂停按钮）
 };
 
 const Fonts& GetFonts();

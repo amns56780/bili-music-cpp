@@ -17,10 +17,12 @@ struct SidebarActions {
     bool toggleImportMenu = false;
     bool pasteLink = false;
     bool login = false;
+    bool logout = false;
 };
 
 void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float height,
                  const std::string& statusText, bool statusIsError, int playlistCount,
+                 bool loggedIn, const std::string& userName, long long userId,
                  SidebarActions* actions);
 
 }  // namespace Ui

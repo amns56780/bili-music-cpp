@@ -64,9 +64,9 @@ void DrawTitleBar(GLFWwindow* window, bool maximized) {
 
     // 左边：小图标 + 标题（和 Java 版一样用 label 字号、次要文字色）
     const std::string note = Icons::Utf8(Icons::MusicNote);
-    draw->AddText(GetFonts().body, 14.0f, ImVec2(origin.x + 12.0f, origin.y + (height - 14.0f) / 2),
+    draw->AddText(GetFonts().body, 16.0f, ImVec2(origin.x + 12.0f, origin.y + (height - 14.0f) / 2),
                   Colors::Text2, note.c_str());
-    draw->AddText(GetFonts().small, 12.0f, ImVec2(origin.x + 12.0f + 16.0f + 8.0f,
+    draw->AddText(GetFonts().small, 13.0f, ImVec2(origin.x + 12.0f + 18.0f + 8.0f,
                                                   origin.y + (height - 12.0f) / 2),
                   Colors::Text3, "bilimusic");
 

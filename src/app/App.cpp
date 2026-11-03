@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <thread>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -20,8 +21,14 @@
 #include "ui/Theme.h"
 #include "ui/TitleBar.h"
 #include "ui/WindowFrame.h"
+#include "util/AppLog.h"
 
 namespace {
+
+constexpr const char* kReferer = "https://www.bilibili.com/";
+constexpr const char* kUserAgent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36";
 
 std::wstring utf8ToWide(const std::string& text) {
     if (text.empty()) return {};
@@ -29,6 +36,17 @@ std::wstring utf8ToWide(const std::string& text) {
     std::wstring out((size_t)size, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), out.data(), size);
     return out;
+}
+
+std::string qualityLabel(int qualityId) {
+    switch (qualityId) {
+        case 30216: return "64K";
+        case 30232: return "132K";
+        case 30280: return "192K";
+        case 30250: return "杜比全景声";
+        case 30251: return "Hi-Res 无损";
+        default: return qualityId > 0 ? ("音质 " + std::to_string(qualityId)) : "在线";
+    }
 }
 
 std::string formatModeName(int mode) {
@@ -46,6 +64,7 @@ void App::init(GLFWwindow* window) {
     window_ = window;
     Ui::InitStyle();
     Ui::InitFonts();
+    bili_.init();
 
     std::string engineError;
     if (!engine_.init(&engineError)) {
@@ -55,13 +74,15 @@ void App::init(GLFWwindow* window) {
     std::string loadError;
     if (!store_.load(&loadError)) {
         setStatus(loadError, true);
-        return;
-    }
-    if (!store_.playlists().empty()) {
+    } else if (!store_.playlists().empty()) {
         selectPlaylist(store_.playlists().front().id);
     }
-    if (engine_.ready()) {
-        setStatus("VLC " + engine_.version());
+
+    if (bili_.hasCookie()) {
+        setStatus("正在验证 B 站登录态…");
+        startLoginCheck();
+    } else if (engine_.ready()) {
+        setStatus("VLC " + engine_.version() + " · 未登录（登录后可解锁更高音质）");
     }
 }
 
@@ -95,33 +116,123 @@ void App::selectPlaylist(long long playlistId) {
     playingSongId_ = -1;
 }
 
+void App::postAsync(AsyncEvent event) {
+    std::lock_guard<std::mutex> lock(asyncMutex_);
+    asyncEvents_.push_back(std::move(event));
+}
+
+void App::startLoginCheck() {
+    std::thread([this]() {
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::Login;
+        const bili::NavInfo nav = bili_.fetchNav();
+        event.ok = nav.ok;
+        event.loggedIn = nav.loggedIn;
+        event.userName = nav.userName;
+        event.userId = nav.userId;
+        event.message = nav.message;
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::startOnlinePlayFor(long long songId, const std::string& bvid, long long cid,
+                            const std::string& title, const std::string& artist) {
+    playingSongId_ = songId;
+    playingTitle_ = title;
+    playingArtist_ = artist;
+    pendingSongId_ = songId;
+    setStatus("正在取流：" + title + "（" + bvid + "）");
+    std::thread([this, songId, bvid, cid, title, artist]() {
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::Play;
+        event.songId = songId;
+        event.bvid = bvid;
+        event.cid = cid;
+        event.title = title;
+        event.artist = artist;
+        const bili::AudioStreamInfo stream = bili_.resolveAudio(bvid, cid, 0);
+        event.ok = stream.ok;
+        event.url = stream.url;
+        event.qualityId = stream.qualityId;
+        event.downgraded = stream.downgraded;
+        event.message = stream.message;
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::startOnlinePlay(const StoredSong& song) {
+    if (song.bvid.empty() || song.cid <= 0) {
+        setStatus("「" + song.title + "」缺少 bvid/cid，无法在线取流", true);
+        return;
+    }
+    startOnlinePlayFor(song.id, song.bvid, song.cid, song.title, song.artist);
+}
+
+void App::startPastePlay(const std::string& text) {
+    const std::string bvid = bili::BiliService::parseBvid(text);
+    if (bvid.empty()) {
+        setStatus("没有识别到 BV 号，请粘贴完整链接或 BV 号", true);
+        return;
+    }
+    setStatus("正在解析：" + bvid + " …");
+    std::thread([this, bvid]() {
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::BvPlay;
+        event.bvid = bvid;
+        const bili::VideoInfo video = bili_.fetchVideo(bvid);
+        if (!video.ok) {
+            event.ok = false;
+            event.message = video.message;
+            postAsync(std::move(event));
+            return;
+        }
+        event.title = video.title;
+        event.artist = video.artist;
+        event.cid = video.cid;
+        const bili::AudioStreamInfo stream = bili_.resolveAudio(bvid, video.cid, 0);
+        event.ok = stream.ok;
+        event.url = stream.url;
+        event.qualityId = stream.qualityId;
+        event.downgraded = stream.downgraded;
+        event.message = stream.message;
+        postAsync(std::move(event));
+    }).detach();
+}
+
 void App::playSongById(long long songId) {
     const StoredSong* song = findSong(songId);
     if (song == nullptr) return;
     playingSongId_ = song->id;
     playingTitle_ = song->title;
     playingArtist_ = song->artist;
-    if (song->localPath.empty()) {
-        setStatus("在线曲目「" + song->title + "」需要 M2 的 WBI 取流（当前先跑通 UI + 本地播放）", false);
+    if (!song->localPath.empty()) {
+        std::string error;
+        if (engine_.playPath(utf8ToWide(song->localPath), &error)) {
+            engine_.setVolume(volume_);
+            setStatus("正在播放（本地）：" + song->title);
+        } else {
+            setStatus("播放失败：" + error, true);
+        }
         return;
     }
-    std::string error;
-    if (engine_.playPath(utf8ToWide(song->localPath), &error)) {
-        engine_.setVolume(volume_);
-        setStatus("正在播放（本地文件）：" + song->title);
-    } else {
-        setStatus("播放失败：" + error, true);
-    }
+    startOnlinePlay(*song);
 }
 
 void App::playFirstPlayable() {
-    for (const StoredSong* song : currentSongs()) {
+    const std::vector<const StoredSong*> songs = currentSongs();
+    for (const StoredSong* song : songs) {
         if (!song->localPath.empty()) {
             playSongById(song->id);
             return;
         }
     }
-    setStatus("这个歌单没有本地曲目：在线播放要等 M2 的取流实现", false);
+    for (const StoredSong* song : songs) {
+        if (!song->bvid.empty()) {
+            playSongById(song->id);
+            return;
+        }
+    }
+    setStatus("这个歌单没有可播放的曲目（没有本地文件，也没有 bvid）", true);
 }
 
 void App::stepSong(int direction) {
@@ -151,13 +262,14 @@ void App::stepSong(int direction) {
             index = direction > 0 ? step - 1 : count - step;
         }
         if (index < 0 || index >= count) continue;
-        if (!songs[(size_t)index]->localPath.empty()) {
-            playSongById(songs[(size_t)index]->id);
+        const StoredSong* candidate = songs[(size_t)index];
+        if (!candidate->localPath.empty() || !candidate->bvid.empty()) {
+            playSongById(candidate->id);
             return;
         }
         if (mode_ == 2) break;
     }
-    setStatus("附近没有可播放的本地曲目（在线曲目需要 M2）", false);
+    setStatus("附近没有可播放的曲目", true);
 }
 
 void App::syncPlaybackState() {
@@ -165,11 +277,137 @@ void App::syncPlaybackState() {
     positionMs_ = engine_.ready() ? (double)engine_.positionMs() : 0.0;
     durationMs_ = engine_.ready() ? (double)engine_.lengthMs() : 0.0;
     playing_ = engine_.ready() && engine_.isPlaying();
-    engine_.pumpVolume();  // 应用级音量会话可能晚于播放出现，每帧校正一次
+    engine_.pumpVolume();
     volume_ = engine_.volume();
 }
 
+void App::pollAsync() {
+    std::vector<AsyncEvent> events;
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        events.swap(asyncEvents_);
+    }
+    for (const AsyncEvent& event : events) {
+        if (event.kind == AsyncEvent::Kind::Login) {
+            accountLoggedIn_ = event.loggedIn;
+            accountName_ = event.userName;
+            accountId_ = event.userId;
+            if (event.loggedIn) {
+                setStatus("已登录：" + event.userName + "（UID " + std::to_string(event.userId) + "）");
+            } else {
+                setStatus(event.ok ? "Cookie 无效或已过期，请重新登录" : "登录态校验失败：" + event.message,
+                          true);
+            }
+            continue;
+        }
+        if (event.kind == AsyncEvent::Kind::Play && event.songId != pendingSongId_) continue;
+        if (!event.ok) {
+            if (event.kind == AsyncEvent::Kind::Play) pendingSongId_ = -1;
+            setStatus("取流失败：" + event.message, true);
+            continue;
+        }
+        std::string error;
+        if (!engine_.playUrl(event.url, kReferer, kUserAgent, &error)) {
+            setStatus("播放失败：" + error, true);
+            continue;
+        }
+        engine_.setVolume(volume_);
+        if (event.kind == AsyncEvent::Kind::BvPlay) playingSongId_ = -1;
+        if (event.kind == AsyncEvent::Kind::Play) pendingSongId_ = -1;
+        playingTitle_ = event.title;
+        playingArtist_ = event.artist;
+        std::string message = "在线播放：" + event.title + " · " + qualityLabel(event.qualityId);
+        if (event.downgraded) message += "（档位不可用，已自动降级）";
+        setStatus(message);
+        AppLog::info("App", message + " bvid=" + event.bvid);
+    }
+}
+
+void App::drawDialogs() {
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const bool escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    ImGui::PushStyleColor(ImGuiCol_Text, Ui::Vec4(Ui::Colors::Text));
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, Ui::Vec4(Ui::Colors::Text3));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, Ui::Vec4(Ui::Colors::Dialog));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, Ui::Vec4(Ui::Colors::Dialog));
+    ImGui::PushStyleColor(ImGuiCol_Border, Ui::Vec4(Ui::Colors::Divider));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, Ui::Vec4(Ui::Colors::BgTitleBar));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Ui::Vec4(Ui::Colors::Hover));
+    ImGui::PushStyleColor(ImGuiCol_Border, Ui::Vec4(Ui::Colors::Divider));
+    ImGui::PushStyleColor(ImGuiCol_Button, Ui::Vec4(Ui::Colors::Brand));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Ui::Vec4(Ui::Colors::BrandHover));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, Ui::Vec4(Ui::Colors::BrandHover));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::SetNextWindowPos(ImVec2(display.x * 0.5f, display.y * 0.5f), ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+    if (linkDialogRequested_) {
+        ImGui::OpenPopup("播放链接");
+        linkDialogRequested_ = false;
+    }
+    if (loginDialogRequested_) {
+        ImGui::OpenPopup("登录 B 站");
+        loginDialogRequested_ = false;
+    }
+
+    if (ImGui::BeginPopupModal("播放链接", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("粘贴 B 站视频链接或 BV 号：");
+        ImGui::SetNextItemWidth(520.0f);
+        ImGui::InputText("##link", linkInput_, sizeof(linkInput_));
+        ImGui::Spacing();
+        if (ImGui::Button("播放", ImVec2(110.0f, 32.0f))) {
+            const std::string input = linkInput_;
+            if (!input.empty()) {
+                startPastePlay(input);
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f)) || escapePressed) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("登录 B 站", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("浏览器登录 bilibili.com 后，把整段 Cookie 粘贴到这里：");
+        ImGui::TextDisabled("格式：SESSDATA=xxx; bili_jct=yyy; DedeUserID=123; ...");
+        ImGui::InputTextMultiline("##cookie", cookieInput_, sizeof(cookieInput_), ImVec2(560.0f, 200.0f));
+        ImGui::Spacing();
+        if (ImGui::Button("保存并登录", ImVec2(130.0f, 32.0f))) {
+            const int count = bili_.importCookieText(cookieInput_);
+            if (count > 0) {
+                setStatus("Cookie 已保存，正在验证登录态…");
+                startLoginCheck();
+            } else {
+                setStatus("Cookie 解析失败：没找到 key=value", true);
+            }
+            cookieInput_[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("清除登录", ImVec2(110.0f, 32.0f))) {
+            bili_.clearCookie();
+            accountLoggedIn_ = false;
+            accountName_.clear();
+            accountId_ = 0;
+            setStatus("已退出登录");
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("关闭", ImVec2(100.0f, 32.0f)) || escapePressed) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar(8);
+    ImGui::PopStyleColor(11);
+}
+
 void App::draw() {
+    pollAsync();
     syncPlaybackState();
 
     ImGuiIO& io = ImGui::GetIO();
@@ -198,7 +436,8 @@ void App::draw() {
     ImGui::PopStyleColor();
     Ui::SidebarActions sidebarActions;
     Ui::DrawSidebar(store_, selectedPlaylistId_, mainHeight, status_, statusError_,
-                    (int)store_.playlists().size(), &sidebarActions);
+                    (int)store_.playlists().size(), accountLoggedIn_, accountName_, accountId_,
+                    &sidebarActions);
     ImGui::EndChild();
 
     // ---------------- 歌单页 ----------------
@@ -229,24 +468,23 @@ void App::draw() {
     Ui::DrawPlayBar(playBarData, &playBarActions, io.DisplaySize.x, playerHeight);
     ImGui::EndChild();
 
+    drawDialogs();
+
     ImGui::End();
 
-    // ================= 动作分发 =================  
-    if (sidebarActions.selectPlaylist) {
-        selectPlaylist(sidebarActions.playlistId);
+    // ================= 动作分发 =================
+    if (sidebarActions.selectPlaylist) selectPlaylist(sidebarActions.playlistId);
+    if (sidebarActions.createPlaylist) setStatus("新建歌单：M3 实现（当前数据由 Java 版维护）");
+    if (sidebarActions.pasteLink) linkDialogRequested_ = true;
+    if (sidebarActions.login) loginDialogRequested_ = true;
+    if (sidebarActions.logout) {
+        bili_.clearCookie();
+        accountLoggedIn_ = false;
+        accountName_.clear();
+        accountId_ = 0;
+        setStatus("已退出登录");
     }
-    if (sidebarActions.createPlaylist) {
-        setStatus("新建歌单：M3 实现（当前数据由 Java 版维护）", false);
-    }
-    if (sidebarActions.pasteLink) {
-        setStatus("粘贴链接播放：M2 实现（需要 WBI 取流）", false);
-    }
-    if (sidebarActions.login) {
-        setStatus("扫码 / Cookie 登录：M2 实现", false);
-    }
-    if (sidebarActions.openOutputDevice) {
-        setStatus("输出设备选择：M4 实现（libVLC audio output device 接口）", false);
-    }
+    if (sidebarActions.openOutputDevice) setStatus("输出设备选择：M4 实现");
     if (sidebarActions.openLocalMusic) {
         for (const StoredPlaylist& playlist : store_.playlists()) {
             if (playlist.title == "本地音乐") {
@@ -257,13 +495,13 @@ void App::draw() {
     }
     if (sidebarActions.toggleImportMenu) {
         importMenuOpen_ = !importMenuOpen_;
-        setStatus(importMenuOpen_ ? "导入歌单：M3 实现（收藏夹/稍后再看/UP主投稿/合集）" : "就绪", false);
+        setStatus(importMenuOpen_ ? "导入歌单：M3 实现（收藏夹/稍后再看/UP主投稿/合集）" : "就绪");
     }
 
     if (pageActions.playAll) playFirstPlayable();
     if (pageActions.playSongId >= 0) playSongById(pageActions.playSongId);
-    if (pageActions.selectMode) setStatus("多选 / 复制 / 移动：M3 实现", false);
-    if (pageActions.openMenu) setStatus("歌单菜单（重命名 / 封面 / 分享 / 删除）：M3 实现", false);
+    if (pageActions.selectMode) setStatus("多选 / 复制 / 移动：M3 实现");
+    if (pageActions.openMenu) setStatus("歌单菜单（重命名 / 封面 / 分享 / 删除）：M3 实现");
 
     if (playBarActions.togglePlay) {
         if (hasMedia_) {
@@ -276,17 +514,15 @@ void App::draw() {
     if (playBarActions.next) stepSong(1);
     if (playBarActions.cycleMode) {
         mode_ = (mode_ + 1) % 4;
-        setStatus("播放模式：" + formatModeName(mode_), false);
+        setStatus("播放模式：" + formatModeName(mode_));
     }
     if (playBarActions.seekFinished) engine_.seekMs((int64_t)playBarActions.seekMs);
-    // 不能写「actions.volume != volume_」：PlayBarActions 默认 volume=80，
-    // 没有拖动时每帧都会把音量重置回 80。只在真正拖动/松手时应用。
     if (playBarActions.volumeChanged || playBarActions.volumeFinished) {
         volume_ = playBarActions.volume;
         engine_.setVolume(volume_);
     }
-    if (playBarActions.download) setStatus("下载当前曲目：M3 实现", false);
-    if (playBarActions.openQueue) setStatus("播放队列：M4 实现", false);
-    if (playBarActions.openSleepTimer) setStatus("定时关闭：M4 实现", false);
-    if (playBarActions.openOutputDevice) setStatus("输出设备：M4 实现", false);
+    if (playBarActions.download) setStatus("下载当前曲目：M3 实现");
+    if (playBarActions.openQueue) setStatus("播放队列：M4 实现");
+    if (playBarActions.openSleepTimer) setStatus("定时关闭：M4 实现");
+    if (playBarActions.openOutputDevice) setStatus("输出设备：M4 实现");
 }

@@ -32,7 +32,16 @@
   - **窗口拖动改系统原生**：子类化 WndProc，标题栏 WM_NCHITTEST 返回 HTCAPTION → 系统 modal 拖动（DWM 直接搬窗口，UI 线程零参与）；四边/四角返回 HT* 获得原生缩放；WM_GETMINMAXINFO 最大化不盖任务栏。Java 版被 AWT 挡住做不到，C++ 版是原生方案
   - **封面/圆角抗锯齿**：圆角渐变从「逐行台阶」改为「轴对齐渐变条带 + 四角扇形 PathFillConvex（AA）」，圆形头像用抗锯齿实心圆
   - 修掉音量条每帧被重置回 80% 的 bug（PlayBarActions 默认值误参与比较）
-- [ ] M2：B 站接口（WBI 签名 / Cookie 登录 / 取流）+ 在线播放
+- [x] **M2（核心链路已完成）**：WBI 签名 / Cookie 登录态 / 取流 / 在线播放
+  - [x] Cookie：读写与 Java 版共用的 `~/.bilimusic/settings.json` 里的 `cookie_blob`，启动自动校验 nav 并显示头像/昵称/UID
+  - [x] 登录弹窗（粘贴整段 Cookie）、退出登录；登录态失效提示
+  - [x] WBI 签名：nav 取 img_url/sub_url → 重排表得 mixin_key（缓存 24h）→ 参数加 wts 排序 → md5 得 w_rid
+  - [x] `x/web-interface/view` 取 cid/标题/UP主/时长
+  - [x] `x/player/wbi/playurl` 取流（fnval=4048），失败强刷 WBI key 重试一次，再退到 `x/player/playurl`
+  - [x] 音质选择：指定档位匹配 → 192K/132K/64K 降级链 → 最高带宽兜底；durl 兜底
+  - [x] 在线播放：libVLC + `http-referrer`/`http-user-agent`（否则 bilivideo 403）
+  - [x] 双击在线曲目播放、上一首/下一首自动取流、粘贴 BV 号/链接弹窗播放
+  - [ ] M2 剩余：扫码登录（QR）、音质档位 UI、备用 URL 自动切换、URL 过期自动重取
 - [ ] M3：歌单导入与管理（收藏夹 / 稍后再看 / UP主投稿 / 合集）
 - [ ] M4：沉浸模式 / 封面 / 歌词 / 托盘 / 快捷键
 - [ ] M5：打包（内置 VLC + 免安装 zip + 安装器）

@@ -8,6 +8,7 @@
 #endif
 #include <windows.h>
 
+#include <cmath>
 #include <vector>
 
 #include "util/AppLog.h"
@@ -298,5 +299,8 @@ void VlcEngine::pumpVolume() {
         api_->libvlc_audio_set_volume(player_, 100);
         return;
     }
-    api_->libvlc_audio_set_volume(player_, volume_);
+    // 回退到 VLC 时用和 Java 版一致的立方根曲线：
+    //   VLC 的音量是立方响应，直接给百分比听感不对，反推 vlcVolume = 100 * cbrt(volume/100)
+    const int vlcVolume = (int)std::lround(100.0 * std::cbrt((double)volume_ / 100.0));
+    api_->libvlc_audio_set_volume(player_, vlcVolume < 0 ? 0 : (vlcVolume > 100 ? 100 : vlcVolume));
 }
