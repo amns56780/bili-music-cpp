@@ -214,6 +214,16 @@ void TextEllipsis(const std::string& rawText, float maxWidth, ImFont* font, ImU3
     drawTextAt(font, fontSize, pos, color, text.substr(0, best) + ellipsis);
 }
 
+namespace {
+
+// 图标字体（Material Icons）字形在行框里偏上：视觉中心约在 textTop + 0.325 * iconSize。
+// 想让图标和容器同心，textTop 要用 size/2 - 0.325*iconSize，而不是简单的 (box-icon)/2。
+float iconTextTopForCenter(float boxSize, float iconSize) {
+    return boxSize * 0.5f - iconSize * 0.325f;
+}
+
+}  // namespace
+
 bool IconButton(const char* id, uint32_t icon, float size, float iconSize, ImU32 tint,
                 bool active, bool enabled, const char* tooltip) {
     ImGui::PushID(id);
@@ -232,7 +242,8 @@ bool IconButton(const char* id, uint32_t icon, float size, float iconSize, ImU32
     const std::string glyph = Icons::Utf8(icon);
     const float width = textWidth(GetFonts().body, iconSize, glyph);
     drawTextAt(GetFonts().body, iconSize,
-               ImVec2(pos.x + (size - width) / 2, pos.y + (size - iconSize) / 2), color, glyph);
+               ImVec2(pos.x + (size - width) / 2, pos.y + iconTextTopForCenter(size, iconSize)), color,
+               glyph);
     ImGui::PopID();
     return enabled && pressed;
 }
@@ -321,7 +332,8 @@ bool PlayCircleButton(const char* id, bool playing, float size) {
     const float iconSize = 20.0f;
     const float width = textWidth(GetFonts().iconBig, iconSize, glyph);
     drawTextAt(GetFonts().iconBig, iconSize,
-               ImVec2(pos.x + (size - width) / 2, pos.y + (size - iconSize) / 2), Colors::White, glyph);
+               ImVec2(pos.x + (size - width) / 2, pos.y + iconTextTopForCenter(size, iconSize)),
+               Colors::White, glyph);
     ImGui::PopID();
     return pressed;
 }

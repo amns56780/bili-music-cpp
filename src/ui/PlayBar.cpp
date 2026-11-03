@@ -49,7 +49,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     CoverPlaceholder(data.title, abs(18.0f, (height - Dimens::CoverPlayer) / 2.0f), Dimens::CoverPlayer, 9.0f);
     TextEllipsis(data.title, 236.0f, GetFonts().body, Colors::Text, abs(80.0f, 20.0f));
     TextEllipsis(data.artist, 236.0f, GetFonts().small, Colors::Text3, abs(80.0f, 39.0f));
-    ImGui::SetCursorPos(ImVec2(18.0f + 330.0f - 32.0f, 20.0f));
+    ImGui::SetCursorPos(ImVec2(18.0f + 330.0f - 32.0f, 11.0f));
     if (IconButton("download_current", Icons::Download, 32.0f, 17.0f, Colors::Text2, false,
                    data.hasMedia, "下载当前曲目（M3）")) {
         actions->download = true;
@@ -59,17 +59,19 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     const float centerX = width / 2.0f;
     const float controlsWidth = 238.0f;
     const float controlsLeft = centerX - controlsWidth / 2.0f;
-    ImGui::SetCursorPos(ImVec2(controlsLeft, 8.0f));
+    // 图标按钮的字形在行框里偏上（字体 ascent），所以命中框要比播放键的 y 再往下挪一点，
+    // 视觉上才和其它元素同一条水平中心线（用户反馈的「除播放键外按钮偏上」）。
+    ImGui::SetCursorPos(ImVec2(controlsLeft, 11.0f));
     if (IconButton("mode", modeIcon(data.mode), 32.0f, 17.0f, Colors::Text2, false, true, modeName(data.mode))) {
         actions->cycleMode = true;
     }
-    ImGui::SetCursorPos(ImVec2(controlsLeft + 50.0f, 8.0f));
+    ImGui::SetCursorPos(ImVec2(controlsLeft + 50.0f, 11.0f));
     if (IconButton("prev", Icons::SkipPrevious, 32.0f, 20.0f, Colors::Text, false, data.hasMedia, "上一首")) {
         actions->previous = true;
     }
     ImGui::SetCursorPos(ImVec2(controlsLeft + 100.0f, 8.0f));
     if (PlayCircleButton("playpause", data.playing, 38.0f)) actions->togglePlay = true;
-    ImGui::SetCursorPos(ImVec2(controlsLeft + 156.0f, 8.0f));
+    ImGui::SetCursorPos(ImVec2(controlsLeft + 156.0f, 11.0f));
     if (IconButton("next", Icons::SkipNext, 32.0f, 20.0f, Colors::Text, false, data.hasMedia, "下一首")) {
         actions->next = true;
     }
@@ -108,11 +110,11 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     const std::string volumeIcon =
         Icons::Utf8(data.volume <= 0 ? Icons::VolumeOff
                                      : (data.volume < 50 ? Icons::VolumeDown : Icons::VolumeUp));
-    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, 27.0f), Colors::Text2, volumeIcon.c_str());
+    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, 21.0f), Colors::Text2, volumeIcon.c_str());
     static bool volumeDragging = false;
     static float volumeDraft = 0.8f;
     if (!volumeDragging) volumeDraft = data.volume / 100.0f;
-    ImGui::SetCursorPos(ImVec2(rightLeft + 24.0f, 29.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 24.0f, 20.0f));
     float volumeValue = volumeDraft;
     const SliderResult volumeResult = ThinSlider("volume", &volumeValue, 110.0f, 14.0f, 4.0f, Colors::Text2);
     if (volumeResult.changed) {
@@ -130,17 +132,17 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         (int)std::lround(volumeValue * 100.0f) == 0 ? "静音" :
         std::to_string((int)std::lround(volumeValue * 100.0f)) + "%";
     const float volumeTextWidth = MeasureText(GetFonts().small, 13.0f, volumeText);
-    draw->AddText(GetFonts().small, 13.0f, abs(rightLeft + 24.0f + 110.0f + 6.0f + 34.0f - volumeTextWidth, 30.0f),
+    draw->AddText(GetFonts().small, 13.0f, abs(rightLeft + 24.0f + 110.0f + 6.0f + 34.0f - volumeTextWidth, 23.0f),
                   Colors::Text3, volumeText.c_str());
-    ImGui::SetCursorPos(ImVec2(rightLeft + 182.0f, 20.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 182.0f, 11.0f));
     if (IconButton("output_device", Icons::Headset, 32.0f, 18.0f, Colors::Text2, false, true, "输出设备（M4）")) {
         actions->openOutputDevice = true;
     }
-    ImGui::SetCursorPos(ImVec2(rightLeft + 220.0f, 20.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 220.0f, 11.0f));
     if (IconButton("sleep_timer", Icons::Bedtime, 32.0f, 18.0f, Colors::Text2, false, true, "定时关闭（M4）")) {
         actions->openSleepTimer = true;
     }
-    ImGui::SetCursorPos(ImVec2(rightLeft + 258.0f, 20.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 258.0f, 11.0f));
     if (IconButton("queue", Icons::PlaylistPlay, 32.0f, 18.0f, Colors::Text2, false, true, "播放队列（M4）")) {
         actions->openQueue = true;
     }
