@@ -220,7 +220,10 @@ bool VlcEngine::playPath(const std::wstring& path, std::string* error) {
         appendError(error, "启动播放失败");
         return false;
     }
-    // 应用级音量在会话创建后才会生效，pumpVolume 会持续重试，这里先下发一次
+    // 新曲目：音频输出会重建，音量写出状态重置，pumpVolume 会重新下发一次
+    volumeApplied_ = false;
+    lastVlcVolume_ = -1;
+    volumeDirty_ = true;
     pumpVolume();
     return true;
 }
@@ -256,6 +259,9 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
         appendError(error, "启动播放失败");
         return false;
     }
+    volumeApplied_ = false;
+    lastVlcVolume_ = -1;
+    volumeDirty_ = true;
     pumpVolume();
     return true;
 }
@@ -302,18 +308,44 @@ void VlcEngine::seekMs(int64_t ms) {
 
 void VlcEngine::setVolume(int value) {
     volume_ = value < 0 ? 0 : (value > 100 ? 100 : value);
+    volumeDirty_ = true;
     pumpVolume();
 }
 
 void VlcEngine::pumpVolume() {
     if (!api_ || !player_) return;
-    if (sessionVolumeEnabled_ && appVolume_.setVolume(volume_, /*force=*/true)) {
-        // 应用级音量接管后，libvlc 固定 100%，避免双重衰减
-        api_->libvlc_audio_set_volume(player_, 100);
+
+    const uint64_t now = GetTickCount64();
+    if (!volumeDirty_ && volumeApplied_ && now - volumeCheckTick_ < 250) return;
+    volumeCheckTick_ = now;
+
+    if (sessionVolumeEnabled_) {
+        // 只用 WASAPI 应用级音量；会话正在重建（换曲/恢复）时**不要**回退去写 VLC 音量，
+        // 否则会在 100%（WASAPI）和 cbrt(80)≈43（VLC）之间来回跳，听感就是「一炸一炸」。
+        if (!appVolume_.refresh() || !appVolume_.available()) return;
+        const int current = appVolume_.volume();
+        if (!volumeApplied_ || volumeDirty_ || current != volume_) {
+            if (!appVolume_.setVolume(volume_, /*force=*/false)) return;
+            if (lastVlcVolume_ != 100) {
+                api_->libvlc_audio_set_volume(player_, 100);
+                lastVlcVolume_ = 100;
+            }
+            volumeApplied_ = true;
+            volumeDirty_ = false;
+        } else {
+            volumeDirty_ = false;
+        }
         return;
     }
+
     // 回退到 VLC 时用和 Java 版一致的立方根曲线：
     //   VLC 的音量是立方响应，直接给百分比听感不对，反推 vlcVolume = 100 * cbrt(volume/100)
-    const int vlcVolume = (int)std::lround(100.0 * std::cbrt((double)volume_ / 100.0));
-    api_->libvlc_audio_set_volume(player_, vlcVolume < 0 ? 0 : (vlcVolume > 100 ? 100 : vlcVolume));
+    int vlcVolume = (int)std::lround(100.0 * std::cbrt((double)volume_ / 100.0));
+    vlcVolume = vlcVolume < 0 ? 0 : (vlcVolume > 100 ? 100 : vlcVolume);
+    if (!volumeApplied_ || volumeDirty_ || lastVlcVolume_ != vlcVolume) {
+        api_->libvlc_audio_set_volume(player_, vlcVolume);
+        lastVlcVolume_ = vlcVolume;
+        volumeApplied_ = true;
+        volumeDirty_ = false;
+    }
 }

@@ -41,7 +41,12 @@
   - [x] 音质选择：指定档位匹配 → 192K/132K/64K 降级链 → 最高带宽兜底；durl 兜底
   - [x] 在线播放：libVLC + `http-referrer`/`http-user-agent`（否则 bilivideo 403）
   - [x] 双击在线曲目播放、上一首/下一首自动取流、粘贴 BV 号/链接弹窗播放
-  - [x] 在线流暂停/恢复防断续：`:network-caching=3000` + `:http-reconnect=true`
+  - [x] 音量写入节流（修「调完音量后一炸一炸」）：
+  - 原因：每帧都写 WASAPI 音量（60 次/秒）+ 每帧写 libvlc 音量；音量写入自带短斜坡，高频重写会周期性爆音；
+    会话重建瞬间还会回退去写 VLC 音量（cbrt(80)≈43），和 WASAPI 的 100% 来回跳
+  - 修复：只在「音量变化 / 刚起播 / 会话重建」时写一次；平时 250ms 只读检查；WASAPI 模式永不回退写 VLC 音量
+  - 新增会话过期检测：VLC 换曲/恢复重建音频输出后自动重新绑定并重新下发音量
+- [x] 在线流暂停/恢复防断续：`:network-caching=3000` + `:http-reconnect=true`
   - 原因：VLC 默认网络缓存只有 1s，暂停时缓存被耗干，恢复瞬间要重连 mcdn 拉数据 → 断断续续
   - 自检工具：`bilimusic.exe --test-pause <本地音频>` / `--test-pause-online BV1xx`
     （用 WASAPI 峰值表每 50ms 采样，统计恢复后的静音采样比例；修复前 ~11%，修复后 ~0.8%，本地文件 0%）

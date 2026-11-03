@@ -82,6 +82,7 @@ bool AppVolume::init() {
 }
 
 void AppVolume::shutdown() {
+    safeRelease(sessionControl_);
     safeRelease(meter_);
     safeRelease(sessionVolume_);
     safeRelease(sessionManager_);
@@ -91,6 +92,23 @@ void AppVolume::shutdown() {
         CoUninitialize();
         comInitialized_ = false;
     }
+}
+
+bool AppVolume::refresh() {
+    if (sessionVolume_ == nullptr || sessionControl_ == nullptr) {
+        return ensureSession();
+    }
+    AudioSessionState state = AudioSessionStateInactive;
+    if (SUCCEEDED(sessionControl_->GetState(&state)) && state != AudioSessionStateExpired) {
+        return true;
+    }
+    // VLC 重建音频输出后旧会话会 Expired：释放并重新枚举（限频重试交给 ensureSession）
+    safeRelease(sessionControl_);
+    safeRelease(meter_);
+    safeRelease(sessionVolume_);
+    lastRetryTick_ = 0;
+    AppLog::info("AppVolume", "音频会话已失效，重新绑定");
+    return ensureSession();
 }
 
 bool AppVolume::ensureSession() {
@@ -121,14 +139,18 @@ bool AppVolume::ensureSession() {
                 if (SUCCEEDED(control2->QueryInterface(kIidSimpleAudioVolume, (void**)&simple)) &&
                     simple != nullptr) {
                     sessionVolume_ = simple;
+                    // 留着 control2 用于判断会话是否过期（VLC 换曲/恢复会重建音频输出）
+                    sessionControl_ = control2;
+                    control2 = nullptr;
                     IAudioMeterInformation* meter = nullptr;
-                    if (SUCCEEDED(control2->QueryInterface(kIidAudioMeterInformation, (void**)&meter)) &&
+                    if (SUCCEEDED(sessionControl_->QueryInterface(kIidAudioMeterInformation,
+                                                                  (void**)&meter)) &&
                         meter != nullptr) {
                         meter_ = meter;
                     }
                 }
             }
-            control2->Release();
+            if (control2 != nullptr) control2->Release();
         }
         control->Release();
     }

@@ -63,4 +63,11 @@ private:
     media::AppVolume appVolume_;
     bool sessionVolumeEnabled_ = false;
     int volume_ = 80;
+
+    // 音量写出节流：每帧写 WASAPI / VLC 音量会听到「一炸一炸」的杂音，
+    // 只在音量真的变化 / 刚起播 / 会话重建时写，其余时间 250ms 检查一次会话状态。
+    bool volumeDirty_ = true;
+    bool volumeApplied_ = false;
+    uint64_t volumeCheckTick_ = 0;
+    int lastVlcVolume_ = -1;
 };
