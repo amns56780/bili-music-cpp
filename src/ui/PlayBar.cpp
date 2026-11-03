@@ -119,6 +119,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         volumeDragging = true;
         volumeDraft = volumeValue;
         actions->volume = (int)std::lround(volumeValue * 100.0f);
+        actions->volumeChanged = true;
     }
     if (volumeResult.finished) {
         volumeDragging = false;

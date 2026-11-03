@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "media/AppVolume.h"
+
 // libVLC 播放内核封装。
 //
 // 设计取舍：不链接 vlc 的 .lib，而是运行时 LoadLibrary + GetProcAddress。
@@ -39,8 +41,11 @@ public:
     int64_t lengthMs() const;
     void seekMs(int64_t ms);
 
-    int volume() const;
+    // 音量：优先走 WASAPI 应用级音量（绕开 VLC，立即生效）；不可用时回退 libvlc。
+    // App 每帧调用 pumpVolume()，保证 VLC 自己重置会话音量时也能被纠正回来。
+    int volume() const { return volume_; }
     void setVolume(int value);
+    void pumpVolume();
 
 private:
     void releasePlayer();
@@ -53,4 +58,8 @@ private:
 
     struct Api;
     Api* api_ = nullptr;
+
+    media::AppVolume appVolume_;
+    bool sessionVolumeEnabled_ = false;
+    int volume_ = 80;
 };

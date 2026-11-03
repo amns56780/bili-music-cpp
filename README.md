@@ -27,6 +27,11 @@
 - [x] 图标字体：Material Icons（Apache-2.0）合并进正文字体，按钮图标与 Java 版一一对应
 - [x] 播放模式按钮循环切换（顺序 / 列表循环 / 单曲循环 / 随机），图标同步变化
 - [x] emoji 兼容：Java 版数据里的 emoji 标题在 C++ 字体里没有字形，显示层统一替换成音符图标（数据不动）
+- [x] M1.6：三个由 Java 版继承的痛点修复
+  - **音量不再经过 VLC**：改用 Windows WASAPI 的「每应用音量」（ISimpleAudioVolume），拖动即时生效，libVLC 固定 100%；WASAPI 不可用时自动回退 libvlc
+  - **窗口拖动改系统原生**：子类化 WndProc，标题栏 WM_NCHITTEST 返回 HTCAPTION → 系统 modal 拖动（DWM 直接搬窗口，UI 线程零参与）；四边/四角返回 HT* 获得原生缩放；WM_GETMINMAXINFO 最大化不盖任务栏。Java 版被 AWT 挡住做不到，C++ 版是原生方案
+  - **封面/圆角抗锯齿**：圆角渐变从「逐行台阶」改为「轴对齐渐变条带 + 四角扇形 PathFillConvex（AA）」，圆形头像用抗锯齿实心圆
+  - 修掉音量条每帧被重置回 80% 的 bug（PlayBarActions 默认值误参与比较）
 - [ ] M2：B 站接口（WBI 签名 / Cookie 登录 / 取流）+ 在线播放
 - [ ] M3：歌单导入与管理（收藏夹 / 稍后再看 / UP主投稿 / 合集）
 - [ ] M4：沉浸模式 / 封面 / 歌词 / 托盘 / 快捷键

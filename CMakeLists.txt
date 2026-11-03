@@ -42,10 +42,13 @@ set(APP_SOURCES
     src/main.cpp
     src/app/App.cpp
     src/media/VlcEngine.cpp
+    src/media/AppVolume.cpp
     src/data/LibraryStore.cpp
+    src/util/AppLog.cpp
     src/ui/Theme.cpp
     src/ui/Components.cpp
     src/ui/TitleBar.cpp
+    src/ui/WindowFrame.cpp
     src/ui/Sidebar.cpp
     src/ui/PlaylistPage.cpp
     src/ui/PlayBar.cpp

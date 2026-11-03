@@ -19,6 +19,7 @@
 #include "ui/Sidebar.h"
 #include "ui/Theme.h"
 #include "ui/TitleBar.h"
+#include "ui/WindowFrame.h"
 
 namespace {
 
@@ -164,7 +165,8 @@ void App::syncPlaybackState() {
     positionMs_ = engine_.ready() ? (double)engine_.positionMs() : 0.0;
     durationMs_ = engine_.ready() ? (double)engine_.lengthMs() : 0.0;
     playing_ = engine_.ready() && engine_.isPlaying();
-    if (hasMedia_ && engine_.volume() > 0) volume_ = engine_.volume();
+    engine_.pumpVolume();  // 应用级音量会话可能晚于播放出现，每帧校正一次
+    volume_ = engine_.volume();
 }
 
 void App::draw() {
@@ -184,7 +186,7 @@ void App::draw() {
                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
     ImGui::Begin("##root", nullptr, rootFlags);
 
-    const bool maximized = window_ != nullptr && glfwGetWindowAttrib(window_, GLFW_MAXIMIZED) != 0;
+    const bool maximized = Ui::WindowIsMaximized(window_);
     ImGui::SetCursorPos(ImVec2(0, 0));
     Ui::DrawTitleBar(window_, maximized);
 
@@ -277,7 +279,9 @@ void App::draw() {
         setStatus("播放模式：" + formatModeName(mode_), false);
     }
     if (playBarActions.seekFinished) engine_.seekMs((int64_t)playBarActions.seekMs);
-    if (playBarActions.volumeFinished || playBarActions.volume != volume_) {
+    // 不能写「actions.volume != volume_」：PlayBarActions 默认 volume=80，
+    // 没有拖动时每帧都会把音量重置回 80。只在真正拖动/松手时应用。
+    if (playBarActions.volumeChanged || playBarActions.volumeFinished) {
         volume_ = playBarActions.volume;
         engine_.setVolume(volume_);
     }

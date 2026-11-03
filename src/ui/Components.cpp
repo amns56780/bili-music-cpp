@@ -357,24 +357,52 @@ SliderResult ThinSlider(const char* id, float* value, float width, float height,
 void CoverPlaceholder(const std::string& seed, ImVec2 pos, float size, float radius) {
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const Gradient& gradient = kGradients[seed.empty() ? 0 : (int)(fnv1a(seed) % (uint32_t)kGradientCount)];
-    // ImGui 没有「圆角渐变」的现成 API：按 2px 一条横带自己画，
-    // 每条的左右内缩量用圆角半径的圆弧公式算，视觉上和圆角矩形渐变一致。
-    const int steps = std::max(8, (int)(size / 2.0f));
     const float r = std::max(0.0f, std::min(radius, size / 2.0f));
-    for (int i = 0; i < steps; ++i) {
-        const float t0 = (float)i / (float)steps;
-        const float t1 = (float)(i + 1) / (float)steps;
-        const float y0 = pos.y + size * t0;
-        const float y1 = pos.y + size * t1;
-        float inset = 0.0f;
-        if (r > 0.0f) {
-            const float topDy = r - size * t0;
-            if (topDy > 0.0f) inset = std::max(inset, r - std::sqrt(std::max(0.0f, r * r - topDy * topDy)));
-            const float bottomDy = r - size * (1.0f - t1);
-            if (bottomDy > 0.0f) inset = std::max(inset, r - std::sqrt(std::max(0.0f, r * r - bottomDy * bottomDy)));
+
+    // ImGui 没有「圆角渐变」API。之前用 1px 横带硬画，圆角两侧是逐行台阶，肉眼可见锯齿。
+    // 现在拆成「中间轴对齐的渐变条带 + 四个圆角扇形」：
+    //   - 条带只有水平/垂直边，像素对齐，没有锯齿；
+    //   - 圆角用 PathArcTo + PathFillConvex，ImGui 的填充带抗锯齿。
+    if (r >= size / 2.0f - 0.5f) {
+        // 完全圆形（账号头像）：实心圆是抗锯齿的，渐变在这种小尺寸上直接用主色
+        draw->AddCircleFilled(ImVec2(pos.x + size / 2.0f, pos.y + size / 2.0f), size / 2.0f,
+                              gradient.from, 48);
+    } else {
+        const int steps = std::max(4, (int)(size / 2.0f));
+        const ImU32 topColor = lerpColor(gradient.from, gradient.to, 0.05f);
+        const ImU32 bottomColor = lerpColor(gradient.from, gradient.to, 0.95f);
+
+        auto fillBand = [&](float y0, float y1, float x0, float x1, float t) {
+            if (y1 <= y0 + 0.1f) return;
+            draw->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1 + 0.5f), lerpColor(gradient.from, gradient.to, t));
+        };
+
+        for (int i = 0; i < steps; ++i) {
+            const float t0 = (float)i / (float)steps;
+            const float t1 = (float)(i + 1) / (float)steps;
+            const float y0 = pos.y + size * t0;
+            const float y1 = pos.y + size * t1;
+            const float t = (t0 + t1) / 2.0f;
+            if (y1 <= pos.y + r + 0.5f) {
+                fillBand(y0, y1, pos.x + r, pos.x + size - r, t);
+            } else if (y0 >= pos.y + size - r - 0.5f) {
+                fillBand(y0, y1, pos.x + r, pos.x + size - r, t);
+            } else {
+                fillBand(y0, y1, pos.x, pos.x + size, t);
+            }
         }
-        draw->AddRectFilled(ImVec2(pos.x + inset, y0), ImVec2(pos.x + size - inset, y1 + 0.5f),
-                            lerpColor(gradient.from, gradient.to, (t0 + t1) / 2.0f));
+        // 四个圆角（注意 ImGui 的 y 轴向下，角度按顺时针算）
+        const float pid = 3.14159265f;
+        // 圆角要填「四分之一圆」：先压入圆心，再沿弧线打点，PathFillConvex 才会填成扇形
+        auto corner = [&](ImVec2 center, float startAngle, float endAngle, ImU32 color) {
+            draw->PathLineTo(center);
+            draw->PathArcTo(center, r, startAngle, endAngle, 12);
+            draw->PathFillConvex(color);
+        };
+        corner(ImVec2(pos.x + r, pos.y + r), pid, pid * 1.5f, topColor);
+        corner(ImVec2(pos.x + size - r, pos.y + r), pid * 1.5f, pid * 2.0f, topColor);
+        corner(ImVec2(pos.x + size - r, pos.y + size - r), 0.0f, pid * 0.5f, bottomColor);
+        corner(ImVec2(pos.x + r, pos.y + size - r), pid * 0.5f, pid, bottomColor);
     }
     const std::string initial = firstUtf8Char(seed);
     const std::string text = initial.empty() ? "♪" : initial;

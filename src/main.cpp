@@ -13,6 +13,7 @@
 #include "imgui_impl_opengl3.h"
 
 #include "app/App.h"
+#include "ui/WindowFrame.h"
 
 namespace {
 
@@ -49,6 +50,8 @@ int main(int, char**) {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     glfwSetWindowSizeLimits(window, 1000, 640, GLFW_DONT_CARE, GLFW_DONT_CARE);
+    // 无边框窗口交给原生窗口过程：标题栏原生拖动 + 四边原生缩放（Java 版被 AWT 挡住做不到）
+    Ui::InstallWindowFrame(window);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();

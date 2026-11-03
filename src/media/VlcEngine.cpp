@@ -10,6 +10,8 @@
 
 #include <vector>
 
+#include "util/AppLog.h"
+
 namespace {
 
 std::string wideToUtf8(const std::wstring& text) {
@@ -149,6 +151,15 @@ bool VlcEngine::init(std::string* error) {
         return false;
     }
     api_ = api;
+
+    // 优先使用 WASAPI 应用级音量：不经过 VLC，拖动音量条立即生效
+    if (appVolume_.init()) {
+        sessionVolumeEnabled_ = true;
+        AppLog::info("VlcEngine", "音量走 WASAPI 应用级音量（不经过 VLC）");
+    } else {
+        sessionVolumeEnabled_ = false;
+        AppLog::info("VlcEngine", "WASAPI 不可用，音量回退到 libvlc");
+    }
     return true;
 }
 
@@ -167,6 +178,7 @@ void VlcEngine::releasePlayer() {
 
 void VlcEngine::shutdown() {
     releasePlayer();
+    appVolume_.shutdown();
     if (api_ && instance_) api_->libvlc_release(instance_);
     instance_ = nullptr;
     delete api_;
@@ -203,6 +215,8 @@ bool VlcEngine::playPath(const std::wstring& path, std::string* error) {
         appendError(error, "启动播放失败");
         return false;
     }
+    // 应用级音量在会话创建后才会生效，pumpVolume 会持续重试，这里先下发一次
+    pumpVolume();
     return true;
 }
 
@@ -233,6 +247,7 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
         appendError(error, "启动播放失败");
         return false;
     }
+    pumpVolume();
     return true;
 }
 
@@ -271,11 +286,17 @@ void VlcEngine::seekMs(int64_t ms) {
     if (api_ && player_) api_->libvlc_media_player_set_time(player_, ms);
 }
 
-int VlcEngine::volume() const {
-    if (!api_ || !player_) return 0;
-    return api_->libvlc_audio_get_volume(player_);
+void VlcEngine::setVolume(int value) {
+    volume_ = value < 0 ? 0 : (value > 100 ? 100 : value);
+    pumpVolume();
 }
 
-void VlcEngine::setVolume(int value) {
-    if (api_ && player_) api_->libvlc_audio_set_volume(player_, value);
+void VlcEngine::pumpVolume() {
+    if (!api_ || !player_) return;
+    if (sessionVolumeEnabled_ && appVolume_.setVolume(volume_, /*force=*/true)) {
+        // 应用级音量接管后，libvlc 固定 100%，避免双重衰减
+        api_->libvlc_audio_set_volume(player_, 100);
+        return;
+    }
+    api_->libvlc_audio_set_volume(player_, volume_);
 }

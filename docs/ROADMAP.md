@@ -21,6 +21,13 @@
 - [x] 播放模式按钮、上一首/下一首、进度拖动、音量拖动已接到 libVLC
 - [x] emoji 标题显示降级（替换成音符图标，数据不动）
 
+## M1.6 · 交互与渲染修复（已完成）
+
+- [x] 应用级音量：WASAPI ISimpleAudioVolume，音量绕开 VLC（即时生效），不可用时回退 libvlc
+- [x] 原生无边框窗口：WM_NCHITTEST → HTCAPTION 系统拖动、HT* 四边缩放、WM_NCCALCSIZE 去边框、WM_GETMINMAXINFO 工作区最大化
+- [x] 封面圆角/头像抗锯齿：渐变条带 + 四角扇形（AA），不再有逐行台阶
+- [x] 修复音量条每帧被重置回 80% 的问题
+
 ## M2 · B 站接口与在线播放
 
 从 Kotlin 版 `shared/` 1:1 移植：

@@ -23,6 +23,7 @@ struct PlayBarActions {
     bool cycleMode = false;
     bool seekFinished = false;
     double seekMs = 0.0;
+    bool volumeChanged = false;
     bool volumeFinished = false;
     int volume = 80;
     bool openQueue = false;

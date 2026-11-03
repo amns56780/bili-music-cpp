@@ -70,33 +70,9 @@ void DrawTitleBar(GLFWwindow* window, bool maximized) {
                                                   origin.y + (height - 12.0f) / 2),
                   Colors::Text3, "bilimusic");
 
-    // 拖动区：整个标题栏减去右侧三个按钮。
-    // 拖动用「屏幕绝对坐标」算位移，不能用 ImGui 的窗口相对坐标（窗口一动就会自激抖动）。
-    const float dragWidth = width - buttonWidth * 3.0f;
-    ImGui::SetCursorScreenPos(origin);
-    ImGui::InvisibleButton("##titlebar_drag", ImVec2(dragWidth > 1.0f ? dragWidth : 1.0f, height));
-    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-        HWND hwnd = glfwGetWin32Window(window);
-        ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
-    }
-    static bool dragging = false;
-    static POINT dragStartCursor{};
-    static int dragStartWindowX = 0;
-    static int dragStartWindowY = 0;
-    if (ImGui::IsItemActivated()) {
-        POINT cursor{};
-        GetCursorPos(&cursor);
-        dragStartCursor = cursor;
-        glfwGetWindowPos(window, &dragStartWindowX, &dragStartWindowY);
-        dragging = true;
-    }
-    if (dragging && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        POINT cursor{};
-        GetCursorPos(&cursor);
-        glfwSetWindowPos(window, dragStartWindowX + (cursor.x - dragStartCursor.x),
-                         dragStartWindowY + (cursor.y - dragStartCursor.y));
-    }
-    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging = false;
+    // 拖动和双击最大化交给系统（WM_NCHITTEST 返回 HTCAPTION，见 WindowFrame.cpp）：
+    // 原生 modal 拖动由 DWM 直接搬窗口，UI 线程完全不参与，不会像 Java 版那样一卡一卡。
+    // 这里只负责右侧三个窗口按钮（该区域 WM_NCHITTEST 返回 HTCLIENT，仍然走 ImGui 点击）。
 
     // 右侧：最小化 / 最大化(还原) / 关闭
     const WindowButtonKind kinds[3] = { WindowButtonKind::Minimize,
