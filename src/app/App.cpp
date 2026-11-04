@@ -16,6 +16,8 @@
 
 #include <GLFW/glfw3.h>
 
+#include <commdlg.h>
+
 #include "ui/Components.h"
 #include "ui/PlayBar.h"
 #include "ui/PlaylistPage.h"
@@ -31,6 +33,29 @@ constexpr const char* kReferer = "https://www.bilibili.com/";
 constexpr const char* kUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36";
+
+std::string wideToUtf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int size =
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0, nullptr, nullptr);
+    std::string out((size_t)size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), out.data(), size, nullptr,
+                        nullptr);
+    return out;
+}
+
+std::wstring chooseImageFileW() {
+    wchar_t fileBuffer[32768] = {};
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.lpstrFilter = L"图片 (*.png;*.jpg;*.jpeg;*.bmp;*.webp)\0*.png;*.jpg;*.jpeg;*.bmp;*.webp\0所有文件\0*.*\0";
+    dialog.lpstrFile = fileBuffer;
+    dialog.nMaxFile = (DWORD)(sizeof(fileBuffer) / sizeof(wchar_t));
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    dialog.lpstrTitle = L"选择歌单封面图片";
+    if (GetOpenFileNameW(&dialog) == FALSE) return {};
+    return fileBuffer;
+}
 
 std::wstring utf8ToWide(const std::string& text) {
     if (text.empty()) return {};
@@ -878,6 +903,50 @@ void App::finishImport(const AsyncEvent& event) {
     AppLog::info("App", "导入完成 " + title + " 新增 " + std::to_string(added));
 }
 
+void App::applyMultiAction(long long targetPlaylistId) {
+    if (selectedSongIds_.empty()) {
+        setStatus("没有选中的曲目");
+        return;
+    }
+    if (multiAction_ == 2 && targetPlaylistId == selectedPlaylistId_) {
+        setStatus("移动目标不能是当前歌单", true);
+        return;
+    }
+    const std::vector<int64_t> ids(selectedSongIds_.begin(), selectedSongIds_.end());
+    std::string targetTitle;
+    for (const StoredPlaylist& playlist : store_.playlists()) {
+        if (playlist.id == targetPlaylistId) targetTitle = playlist.title;
+    }
+    const int count = multiAction_ == 1 ? store_.copySongsTo(targetPlaylistId, ids)
+                                        : store_.moveSongsTo(targetPlaylistId, ids);
+    if (multiAction_ == 2) selectedSongIds_.clear();
+    setStatus((multiAction_ == 1 ? "已复制 " : "已移动 ") + std::to_string(count) + " 首到「" +
+              targetTitle + "」");
+}
+
+void App::chooseLocalCover() {
+    const StoredPlaylist* playlist = currentPlaylist();
+    if (playlist == nullptr) return;
+    const std::wstring source = chooseImageFileW();
+    if (source.empty()) return;
+    std::wstring extension = L".png";
+    const size_t dot = source.find_last_of(L'.');
+    if (dot != std::wstring::npos && source.size() - dot <= 6) extension = source.substr(dot);
+    std::wstring coversDir = LibraryStore::dataDir() + L"\\covers";
+    CreateDirectoryW(coversDir.c_str(), nullptr);
+    const std::wstring destination =
+        coversDir + L"\\playlist_" + std::to_wstring(playlist->id) + extension;
+    if (CopyFileW(source.c_str(), destination.c_str(), FALSE) == FALSE) {
+        setStatus("复制封面图片失败", true);
+        return;
+    }
+    if (store_.setPlaylistCover(playlist->id, "", wideToUtf8(destination))) {
+        setStatus("已设置歌单封面（本地图片）");
+    } else {
+        setStatus("设置封面失败", true);
+    }
+}
+
 void App::drawM3Dialogs() {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const ImVec2 center(display.x * 0.5f, display.y * 0.5f);
@@ -1063,6 +1132,99 @@ void App::drawM3Dialogs() {
                 ImGui::CloseCurrentPopup();
                 startImportWorker(context);
             }
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- 多选：选择目标歌单 ----
+    if (targetPlaylistDialogRequested_) ImGui::OpenPopup("选择目标歌单");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("选择目标歌单", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!targetPlaylistDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextUnformatted(multiAction_ == 1 ? "复制到哪个歌单：" : "移动到哪个歌单：");
+        ImGui::TextDisabled("已选 %d 首", (int)selectedSongIds_.size());
+        long long pendingTarget = -1;
+        ImGui::BeginChild("##target_list", ImVec2(420.0f, 260.0f), ImGuiChildFlags_Borders);
+        for (const StoredPlaylist& playlist : store_.playlists()) {
+            const std::string label =
+                Ui::DisplayText(playlist.title) + "  (" + std::to_string(store_.songCount(playlist.id)) +
+                " 首)";
+            if (ImGui::Selectable(label.c_str())) {
+                pendingTarget = playlist.id;
+            }
+        }
+        ImGui::EndChild();
+        ImGui::Spacing();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            targetPlaylistDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        if (pendingTarget >= 0) {
+            targetPlaylistDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+            applyMultiAction(pendingTarget);
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- 多选：删除曲目确认 ----
+    if (deleteSongsDialogRequested_) ImGui::OpenPopup("删除曲目");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("删除曲目", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!deleteSongsDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextWrapped("从当前歌单删除选中的 %d 首曲目？此操作不可恢复。",
+                           (int)selectedSongIds_.size());
+        ImGui::Spacing();
+        if (ImGui::Button("删除", ImVec2(110.0f, 32.0f))) {
+            const std::vector<int64_t> ids(selectedSongIds_.begin(), selectedSongIds_.end());
+            const int removed = store_.removeSongs(ids);
+            selectedSongIds_.clear();
+            setStatus("已删除 " + std::to_string(removed) + " 首曲目");
+            deleteSongsDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            deleteSongsDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- 封面：从歌单视频选 ----
+    if (coverSongDialogRequested_) ImGui::OpenPopup("从歌单视频选封面");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("从歌单视频选封面", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!coverSongDialogRequested_) ImGui::CloseCurrentPopup();
+        const StoredPlaylist* playlist = currentPlaylist();
+        if (playlist == nullptr) {
+            ImGui::TextDisabled("没有选中的歌单");
+        } else {
+            ImGui::TextUnformatted("选择一首歌，用它的视频封面作为歌单封面：");
+            long long pendingSongId = -1;
+            ImGui::BeginChild("##cover_song_list", ImVec2(460.0f, 300.0f), ImGuiChildFlags_Borders);
+            for (const StoredSong* song : currentSongs()) {
+                if (song->coverUrl.empty()) continue;
+                const std::string label = Ui::DisplayText(song->title);
+                if (ImGui::Selectable(label.c_str())) pendingSongId = song->id;
+            }
+            ImGui::EndChild();
+            if (pendingSongId >= 0) {
+                for (const StoredSong* song : currentSongs()) {
+                    if (song->id != pendingSongId) continue;
+                    if (store_.setPlaylistCover(playlist->id, song->coverUrl, "")) {
+                        setStatus("已设置歌单封面（网络封面，M4 接图片缓存后显示）");
+                    }
+                    break;
+                }
+                coverSongDialogRequested_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            coverSongDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
@@ -1312,8 +1474,9 @@ void App::draw() {
     ImGui::BeginChild("##content", ImVec2(io.DisplaySize.x - sidebarWidth, mainHeight),
                       ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
     Ui::PlaylistPageActions pageActions;
-    Ui::DrawPlaylistPage(store_, currentPlaylist(), currentSongs(), playingSongId_,
-                         io.DisplaySize.x - sidebarWidth, mainHeight, &pageActions, nullptr, false);
+    Ui::DrawPlaylistPage(store_, currentPlaylist(), currentSongs(), playingSongId_, selectMode_,
+                         selectedSongIds_, io.DisplaySize.x - sidebarWidth, mainHeight, &pageActions,
+                         nullptr, false);
     ImGui::EndChild();
 
     // ---------------- 播放条 ----------------
@@ -1368,6 +1531,46 @@ void App::draw() {
 
     if (pageActions.playAll) playFirstPlayable();
     if (pageActions.playSongId >= 0) playSongById(pageActions.playSongId);
+    if (pageActions.toggleSelectMode) {
+        selectMode_ = !selectMode_;
+        if (!selectMode_) selectedSongIds_.clear();
+    }
+    if (pageActions.toggleSong) {
+        if (selectedSongIds_.count(pageActions.toggleSongId) != 0) {
+            selectedSongIds_.erase(pageActions.toggleSongId);
+        } else {
+            selectedSongIds_.insert(pageActions.toggleSongId);
+        }
+    }
+    if (pageActions.selectAll) {
+        for (const StoredSong* song : currentSongs()) selectedSongIds_.insert(song->id);
+    }
+    if (pageActions.clearSelection) selectedSongIds_.clear();
+    if (pageActions.copySelected) {
+        if (selectedSongIds_.empty()) {
+            setStatus("先勾选要复制的曲目");
+        } else {
+            multiAction_ = 1;
+            targetPlaylistDialogRequested_ = true;
+        }
+    }
+    if (pageActions.moveSelected) {
+        if (selectedSongIds_.empty()) {
+            setStatus("先勾选要移动的曲目");
+        } else {
+            multiAction_ = 2;
+            targetPlaylistDialogRequested_ = true;
+        }
+    }
+    if (pageActions.deleteSelected) {
+        if (selectedSongIds_.empty()) {
+            setStatus("先勾选要删除的曲目");
+        } else {
+            deleteSongsDialogRequested_ = true;
+        }
+    }
+    if (pageActions.pickCoverFromSong) coverSongDialogRequested_ = true;
+    if (pageActions.pickCoverFromFile) chooseLocalCover();
     if (pageActions.selectMode) setStatus("多选 / 复制 / 移动：M3 后半段实现");
     if (pageActions.requestRename) openRenamePlaylistDialog();
     if (pageActions.requestDelete) openDeletePlaylistDialog();

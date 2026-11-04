@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -103,6 +104,8 @@ private:
     void loadFavFolders();
     void drawM3Dialogs();
     void finishImport(const AsyncEvent& event);
+    void applyMultiAction(long long targetPlaylistId);
+    void chooseLocalCover();
 
     // 扫码登录
     enum class QrState { Idle, Loading, Waiting, Scanned, Expired, Success };
@@ -205,4 +208,12 @@ private:
     int importInputKind_ = 0;  // 1=UP主投稿 2=合集
     char importInput_[512] = {};
     std::string importInputError_;
+
+    // 多选 / 封面（M3 第三批）
+    bool selectMode_ = false;
+    std::set<long long> selectedSongIds_;
+    int multiAction_ = 0;  // 1=复制 2=移动
+    bool targetPlaylistDialogRequested_ = false;
+    bool deleteSongsDialogRequested_ = false;
+    bool coverSongDialogRequested_ = false;
 };

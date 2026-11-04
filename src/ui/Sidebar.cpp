@@ -36,9 +36,9 @@ void drawPlaylistRow(const ImVec2& origin, const StoredPlaylist& playlist, const
         draw->AddRectFilled(ImVec2(pos.x + 3.0f, pos.y + 27.0f - 12.0f),
                             ImVec2(pos.x + 6.0f, pos.y + 27.0f + 12.0f), Colors::Brand, 2.0f);
     }
-    CoverPlaceholder(playlist.title.empty() ? playlist.sourceType : playlist.title,
-                     ImVec2(pos.x + 11.0f, pos.y + (54.0f - Dimens::CoverSide) / 2.0f),
-                     Dimens::CoverSide, Dimens::RadiusCoverSm);
+    CoverImage(playlist.title.empty() ? playlist.sourceType : playlist.title,
+               ImVec2(pos.x + 11.0f, pos.y + (54.0f - Dimens::CoverSide) / 2.0f),
+               Dimens::CoverSide, Dimens::RadiusCoverSm, playlist.coverUrl, playlist.coverPath);
     const float textX = pos.x + 11.0f + Dimens::CoverSide + 10.0f;
     const float textWidth = rowWidth - (textX - pos.x) - 10.0f;
     TextEllipsis(playlist.title, textWidth, GetFonts().body, Colors::Text,

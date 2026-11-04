@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
 #include "data/LibraryStore.h"
@@ -15,12 +16,25 @@ struct PlaylistPageActions {
     bool openMenu = false;
     bool requestRename = false;
     bool requestDelete = false;
+    bool pickCoverFromSong = false;
+    bool pickCoverFromFile = false;
+
+    // 多选
+    bool toggleSelectMode = false;
+    bool toggleSong = false;
+    long long toggleSongId = -1;
+    bool selectAll = false;
+    bool clearSelection = false;
+    bool copySelected = false;
+    bool moveSelected = false;
+    bool deleteSelected = false;
     long long playSongId = -1;
     bool showMenuAboutEdit = false;
 };
 
 void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
                       const std::vector<const StoredSong*>& songs, long long playingSongId,
+                      bool selectMode, const std::set<long long>& selectedSongIds,
                       float contentWidth, float contentHeight, PlaylistPageActions* actions,
                       const char* statusText, bool statusIsError);
 

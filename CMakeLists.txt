@@ -65,7 +65,7 @@ else()
     add_executable(bilimusic WIN32 ${APP_SOURCES})
 endif()
 
-target_include_directories(bilimusic PRIVATE src third_party third_party/qrcodegen)
+target_include_directories(bilimusic PRIVATE src third_party third_party/qrcodegen third_party/stb)
 target_link_libraries(bilimusic PRIVATE imgui)
 
 if (MINGW)

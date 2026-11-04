@@ -65,6 +65,10 @@ SliderResult ThinSlider(const char* id, float* value, float width, float height 
 // 封面占位：按 seed 哈希取渐变 + 首字（对应 Java 的 BmCover）
 void CoverPlaceholder(const std::string& seed, ImVec2 pos, float size, float radius);
 
+// 封面：优先本地图片（coverPath），否则退化成渐变占位；网络封面（coverUrl）等 M4 再接
+void CoverImage(const std::string& seed, ImVec2 pos, float size, float radius,
+                const std::string& coverUrl, const std::string& coverPath);
+
 // 小标签（「收藏夹」「手动新建」）
 void TagChip(const std::string& text, ImVec2 pos);
 

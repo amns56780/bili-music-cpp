@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
+#include <set>
 
 #include <nlohmann/json.hpp>
 
@@ -502,3 +503,49 @@ int LibraryStore::addSongs(int64_t playlistId, const std::vector<StoredSong>& in
     }
     return added;
 }
+
+int LibraryStore::removeSongs(const std::vector<int64_t>& songIds) {
+    if (songIds.empty()) return 0;
+    std::set<int64_t> ids(songIds.begin(), songIds.end());
+    const size_t before = songs_.size();
+    songs_.erase(std::remove_if(songs_.begin(), songs_.end(),
+                                [&ids](const StoredSong& song) { return ids.count(song.id) != 0; }),
+                 songs_.end());
+    const int removed = (int)(before - songs_.size());
+    if (removed > 0) save(nullptr);
+    return removed;
+}
+
+int LibraryStore::copySongsTo(int64_t targetPlaylistId, const std::vector<int64_t>& songIds) {
+    std::set<int64_t> ids(songIds.begin(), songIds.end());
+    std::vector<StoredSong> picked;
+    for (const StoredSong& song : songs_) {
+        if (ids.count(song.id) == 0) continue;
+        StoredSong copy = song;
+        copy.id = 0;
+        copy.playlistId = 0;
+        copy.sortOrder = 0;
+        picked.push_back(std::move(copy));
+    }
+    if (picked.empty()) return 0;
+    return addSongs(targetPlaylistId, picked);
+}
+
+int LibraryStore::moveSongsTo(int64_t targetPlaylistId, const std::vector<int64_t>& songIds) {
+    const int added = copySongsTo(targetPlaylistId, songIds);
+    removeSongs(songIds);
+    return added;
+}
+
+bool LibraryStore::setPlaylistCover(int64_t id, const std::string& coverUrl,
+                                    const std::string& coverPath) {
+    for (StoredPlaylist& playlist : playlists_) {
+        if (playlist.id != id) continue;
+        playlist.coverUrl = coverUrl;
+        playlist.coverPath = coverPath;
+        save(nullptr);
+        return true;
+    }
+    return false;
+}
+

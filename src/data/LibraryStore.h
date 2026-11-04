@@ -78,6 +78,10 @@ public:
     int deletePlaylistByTitle(const std::string& title, int64_t exceptId = -1);
     // incoming 只需要 bvid/cid/title/artist/coverUrl/durationMs/localPath
     int addSongs(int64_t playlistId, const std::vector<StoredSong>& incoming);
+    int removeSongs(const std::vector<int64_t>& songIds);
+    int copySongsTo(int64_t targetPlaylistId, const std::vector<int64_t>& songIds);
+    int moveSongsTo(int64_t targetPlaylistId, const std::vector<int64_t>& songIds);
+    bool setPlaylistCover(int64_t id, const std::string& coverUrl, const std::string& coverPath);
 
     static std::wstring dataDir();
     static std::wstring playlistsFile();

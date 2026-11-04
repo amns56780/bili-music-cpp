@@ -47,6 +47,7 @@ std::string formatDuration(int64_t ms) {
 
 void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
                       const std::vector<const StoredSong*>& songs, long long playingSongId,
+                      bool selectMode, const std::set<long long>& selectedSongIds,
                       float contentWidth, float contentHeight, PlaylistPageActions* actions,
                       const char* statusText, bool statusIsError) {
     const ImVec2 windowPos = ImGui::GetWindowPos();
@@ -62,7 +63,8 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
 
     const float coverX = Dimens::ContentPaddingX;
     const float coverY = 30.0f;
-    CoverPlaceholder(playlist->title, abs(coverX, coverY), Dimens::CoverBig, Dimens::RadiusCard);
+    CoverImage(playlist->title, abs(coverX, coverY), Dimens::CoverBig, Dimens::RadiusCard,
+               playlist->coverUrl, playlist->coverPath);
 
     const float infoX = coverX + Dimens::CoverBig + Dimens::GapLg;
     const float infoWidth = contentWidth - infoX - Dimens::ContentPaddingX;
@@ -88,7 +90,7 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     ImGui::SetCursorPos(ImVec2(infoX, buttonY));
     if (PrimaryButton("play_all", "播放全部", Icons::PlayArrow)) actions->playAll = true;
     ImGui::SetCursorPos(ImVec2(infoX + 110.0f, buttonY));
-    if (GhostButton("select_mode", "多选", Icons::CheckBox)) actions->selectMode = true;
+    if (GhostButton("select_mode", "多选", Icons::CheckBox)) actions->toggleSelectMode = true;
     ImGui::SetCursorPos(ImVec2(infoX + 196.0f, buttonY));
     if (IconButton("page_more", Icons::MoreHoriz, 34.0f, 20.0f, Colors::Text2, false, true,
                    "更多操作")) {
@@ -96,20 +98,43 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     }
     if (ImGui::BeginPopup("page_menu")) {
         if (ImGui::Selectable("重命名歌单")) actions->requestRename = true;
-        if (ImGui::Selectable("从歌单视频选封面")) actions->openMenu = true;
-        if (ImGui::Selectable("从本地图片选封面")) actions->openMenu = true;
+        if (ImGui::Selectable("从歌单视频选封面")) actions->pickCoverFromSong = true;
+        if (ImGui::Selectable("从本地图片选封面")) actions->pickCoverFromFile = true;
         if (ImGui::Selectable("分享歌单")) actions->openMenu = true;
         ImGui::Separator();
         if (ImGui::Selectable("删除歌单")) actions->requestDelete = true;
         ImGui::EndPopup();
     }
-    // ---------------- 曲目表 ----------------
-    const float tableTop = coverBottom + 30.0f;
+
+    // ---------------- 多选工具条 ----------------
     const float rowX = Dimens::ContentPaddingX - 12.0f;
     const float rowWidth = contentWidth - rowX * 2.0f;
     const float artistX = rowX + rowWidth - 66.0f - 210.0f;
+    float tableTop = coverBottom + 30.0f;
+    if (selectMode) {
+        const float toolbarY = coverBottom + 12.0f;
+        const int selectedCount = (int)selectedSongIds.size();
+        const std::string selectedText = "已选 " + std::to_string(selectedCount) + " 首";
+        draw->AddText(GetFonts().body, 18.0f, abs(rowX, toolbarY + 6.0f), Colors::Text2,
+                      selectedText.c_str());
+        ImGui::SetCursorPos(ImVec2(rowX + 120.0f, toolbarY));
+        if (GhostButton("sel_all", "全选", 0, 30.0f)) actions->selectAll = true;
+        ImGui::SetCursorPos(ImVec2(rowX + 200.0f, toolbarY));
+        if (GhostButton("sel_none", "清空", 0, 30.0f)) actions->clearSelection = true;
+        ImGui::SetCursorPos(ImVec2(rowX + 280.0f, toolbarY));
+        if (GhostButton("sel_copy", "复制到…", 0, 30.0f)) actions->copySelected = true;
+        ImGui::SetCursorPos(ImVec2(rowX + 390.0f, toolbarY));
+        if (GhostButton("sel_move", "移动到…", 0, 30.0f)) actions->moveSelected = true;
+        ImGui::SetCursorPos(ImVec2(rowX + 500.0f, toolbarY));
+        if (GhostButton("sel_delete", "删除", 0, 30.0f)) actions->deleteSelected = true;
+        ImGui::SetCursorPos(ImVec2(rowX + 600.0f, toolbarY));
+        if (GhostButton("sel_done", "完成", 0, 30.0f)) actions->toggleSelectMode = true;
+        tableTop = coverBottom + 54.0f;
+    }
 
-    draw->AddText(GetFonts().small, 15.0f, abs(rowX + 48.0f - 8.0f, tableTop + 9.0f), Colors::Text3, "#");
+    // ---------------- 曲目表 ----------------
+    draw->AddText(GetFonts().small, 15.0f, abs(rowX + 48.0f - 8.0f, tableTop + 9.0f), Colors::Text3,
+                  selectMode ? "选择" : "#");
     draw->AddText(GetFonts().small, 15.0f, abs(rowX + 48.0f + 24.0f, tableTop + 9.0f), Colors::Text3, "音乐标题");
     draw->AddText(GetFonts().small, 15.0f, abs(artistX, tableTop + 9.0f), Colors::Text3, "UP主");
     const float durationHeaderWidth = MeasureText(GetFonts().small, 15.0f, "时长");
@@ -141,8 +166,23 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
             draw->AddRectFilled(pos, ImVec2(pos.x + rowWidth, pos.y + Dimens::RowHeight),
                                 Colors::Hover, Dimens::RadiusRow);
         }
-        // 序号 / 播放中图标
-        if (isPlaying) {
+        // 多选模式：勾选框；普通模式：序号 / 播放中图标
+        if (selectMode) {
+            const bool checked = selectedSongIds.count(song.id) != 0;
+            const ImVec2 box(pos.x + 22.0f, pos.y + (Dimens::RowHeight - 18.0f) * 0.5f);
+            draw->AddRectFilled(box, ImVec2(box.x + 18.0f, box.y + 18.0f),
+                                checked ? Colors::Brand : Colors::TagBg, 4.0f);
+            draw->AddRect(ImVec2(box.x + 0.5f, box.y + 0.5f),
+                          ImVec2(box.x + 17.5f, box.y + 17.5f),
+                          checked ? Colors::Brand : Colors::Text3, 4.0f);
+            if (checked) {
+                const ImU32 white = Colors::White;
+                draw->AddLine(ImVec2(box.x + 4.0f, box.y + 9.0f), ImVec2(box.x + 8.0f, box.y + 13.0f),
+                              white, 2.0f);
+                draw->AddLine(ImVec2(box.x + 8.0f, box.y + 13.0f), ImVec2(box.x + 14.0f, box.y + 5.0f),
+                              white, 2.0f);
+            }
+        } else if (isPlaying) {
             const std::string note = Icons::Utf8(Icons::GraphicEq);
             draw->AddText(GetFonts().small, 15.0f, ImVec2(pos.x + 26.0f, pos.y + 14.0f), Colors::Brand,
                           note.c_str());
@@ -164,7 +204,12 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         draw->AddText(GetFonts().small, 15.0f,
                       ImVec2(pos.x + rowWidth - 30.0f - durationWidth, pos.y + 15.0f), Colors::Text3,
                       duration.c_str());
-        if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        if (selectMode) {
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                actions->toggleSong = true;
+                actions->toggleSongId = song.id;
+            }
+        } else if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             actions->playSongId = song.id;
         }
         ImGui::PopID();

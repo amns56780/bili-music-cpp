@@ -73,7 +73,10 @@
   - [x] 导入 UP 主投稿：输入 UID / 空间链接（WBI 签名 arc/search，分页 + cid 补齐）
   - [x] 导入合集：输入合集 ID / 链接（seasons_archives_list，合集接口无 cid，统一用 view 补齐）
   - [x] UP主/合集拿到真实昵称/合集名后才判重，重名同样走「覆盖 / 自动重命名 / 取消」
-  - [ ] M3 剩余：多选复制移动、封面设置、下载/缓存、本地音乐扫描
+  - [x] 多选：勾选曲目、全选/清空、复制/移动到其它歌单（按 bvid+cid 去重）、批量删除
+  - [x] 歌单封面：从歌单视频选封面（存 coverUrl）、从本地图片选封面（复制到 ~/.bilimusic/covers 并显示；
+        引入 stb_image + GL 纹理，本地封面在歌单页大图与侧栏小图都能显示）
+  - [ ] M3 剩余：网络封面缓存（coverUrl 目前只存不显示）、下载/缓存、本地音乐扫描
 - [x] 应用图标：与 Java 版同款 ic_launcher.png（glfwSetWindowIcon，多尺寸内嵌）
   和 exe 文件图标 bilimusic.ico（windres 资源）
 - [ ] M4：沉浸模式 / 封面 / 歌词 / 托盘 / 快捷键
