@@ -121,7 +121,17 @@ if (-not (Test-Path $zipPath)) { throw 'portable zip creation failed' }
 
 Write-Host '[5/8] Building self-extracting installer (7zSD.sfx + py7zr LZMA1 payload)'
 $sfxModule = Join-Path $root 'third_party\7zsd\7zSD.sfx'
-if (-not (Test-Path $sfxModule)) { throw ('7z.sfx not found: ' + $sfxModule) }
+if (-not (Test-Path $sfxModule)) { throw ('7zSD.sfx not found: ' + $sfxModule) }
+
+# Give the installer the app icon and version info (copied from the freshly built exe)
+$rescopyExe = Join-Path $stageRoot 'rescopy.exe'
+& $gxx '-O2' '-s' '-static' '-static-libgcc' '-static-libstdc++' '-municode' '-o' $rescopyExe (Join-Path $pkgSrc 'rescopy.cpp')
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $rescopyExe)) { throw 'rescopy build failed' }
+$patchedSfx = Join-Path $stageRoot '7zSD-patched.sfx'
+Copy-Item $sfxModule $patchedSfx -Force
+& $rescopyExe (Join-Path $stage 'bilimusic.exe') $patchedSfx
+if ($LASTEXITCODE -ne 0) { throw 'copying icon/version resources to installer failed' }
+
 $archive = Join-Path $stageRoot 'bilimusic-payload.7z'
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
 & python (Join-Path $pkgSrc 'make_7z.py') write $stage $archive
@@ -134,7 +144,7 @@ $sfxConfig = ';!@Install@!UTF-8!' + $crlf + 'Title="bilimusic"' + $crlf + 'RunPr
 $setupPath = Join-Path $dist 'bilimusic-cpp-setup.exe'
 $out = [System.IO.File]::Create($setupPath)
 try {
-    foreach ($part in @($sfxModule, $configPath, $archive)) {
+    foreach ($part in @($patchedSfx, $configPath, $archive)) {
         $bytes = [System.IO.File]::ReadAllBytes($part)
         $out.Write($bytes, 0, $bytes.Length)
     }
@@ -142,7 +152,7 @@ try {
     $out.Close()
 }
 if (-not (Test-Path $setupPath)) { throw 'setup.exe creation failed' }
-$sfxLength = (Get-Item $sfxModule).Length
+$sfxLength = (Get-Item $patchedSfx).Length
 $configLength = (Get-Item $configPath).Length
 
 Write-Host '[7/8] Self-check (extract payload back out and validate)'

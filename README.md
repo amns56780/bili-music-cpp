@@ -159,6 +159,9 @@ cmake --build build -j 8
   免安装 zip 则用 PowerShell `Compress-Archive` 生成。
 - 打包脚本会自检：解压 zip、切出 setup 内嵌载荷并用 py7zr 解压、校验 `install.bat`/`uninstall.bat`，
   最后从 staging 目录启动一次 exe 做冒烟测试，输出启动耗时与 Working Set。
+- 版本信息：`bilimusic.exe` 带 VERSIONINFO（1.0.0 / bilimusic / amns56780）；安装器在打包时由
+  `scripts/packaging/rescopy.cpp` 把图标和版本资源复制进 7zSD.sfx（版本号、图标与主程序一致）。
+  未做数字签名（需要证书），如需彻底消除 SmartScreen 提示需自行购买/使用代码签名证书。
 
 
 ## 目录结构

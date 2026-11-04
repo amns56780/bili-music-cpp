@@ -315,6 +315,7 @@ std::string formatModeName(int mode) {
 
 void App::init(GLFWwindow* window) {
     window_ = window;
+    AppLog::info("App", std::string("bilimusic v") + BILIMUSIC_VERSION + " 启动");
     Ui::InitStyle();
     Ui::InitFonts();
     bili_.init();

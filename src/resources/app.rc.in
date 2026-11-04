@@ -2,3 +2,33 @@
 
 /* exe 文件图标（资源管理器/任务栏固定时用），路径由 CMake 填入绝对路径 */
 IDI_APPICON ICON "@APP_ICON_PATH@"
+
+/* 版本信息：资源管理器「属性 → 详细信息」、安装器、防误报都用得到 */
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "amns56780"
+            VALUE "FileDescription", "bilimusic - Bilibili music player"
+            VALUE "FileVersion", "@PROJECT_VERSION@.0"
+            VALUE "InternalName", "bilimusic"
+            VALUE "LegalCopyright", "Copyright (C) 2026 amns56780"
+            VALUE "OriginalFilename", "bilimusic.exe"
+            VALUE "ProductName", "bilimusic"
+            VALUE "ProductVersion", "@PROJECT_VERSION@.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
