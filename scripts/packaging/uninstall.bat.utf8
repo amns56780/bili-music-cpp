@@ -1,0 +1,54 @@
+@echo off
+chcp 936 >nul
+title bilimusic 卸载程序
+setlocal enabledelayedexpansion
+
+echo.
+echo   ================================================
+echo      bilimusic 桌面版（C++） · 卸载程序
+echo   ================================================
+echo.
+
+set "TARGET=%LOCALAPPDATA%\Programs\bilimusic"
+if not exist "%TARGET%\bilimusic.exe" (
+    if exist "%~dp0bilimusic.exe" (
+        set "TARGET=%~dp0"
+    ) else (
+        echo   没在默认位置找到 bilimusic：
+        echo     %LOCALAPPDATA%\Programs\bilimusic
+        echo.
+        set /p "TARGET=   请粘贴你的安装目录（含 bilimusic.exe）后回车："
+    )
+)
+set "TARGET=%TARGET:"=%"
+if not exist "%TARGET%\bilimusic.exe" (
+    echo   这个目录里没有 bilimusic，已取消。
+    pause
+    exit /b 1
+)
+
+echo   安装目录：%TARGET%
+echo.
+
+powershell -NoProfile -Command "Get-Process bilimusic -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue" >nul 2>&1
+echo   · 已关闭正在运行的 bilimusic
+
+choice /c YN /n /m "   是否同时删除歌单与登录信息（%USERPROFILE%\.bilimusic）? [Y/N] "
+if errorlevel 2 goto keepdata
+rmdir /s /q "%USERPROFILE%\.bilimusic"
+echo   · 已删除歌单与登录信息
+goto afterdata
+:keepdata
+echo   · 已保留 %USERPROFILE%\.bilimusic（歌单与登录信息）
+:afterdata
+
+powershell -NoProfile -Command "Remove-Item (Join-Path ([Environment]::GetFolderPath('Desktop')) 'bilimusic.lnk') -Force -ErrorAction SilentlyContinue; Remove-Item (Join-Path ([Environment]::GetFolderPath('Programs')) 'bilimusic.lnk') -Force -ErrorAction SilentlyContinue"
+echo   · 已删除桌面与开始菜单快捷方式
+
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\bilimusic" /f >nul 2>&1
+echo   · 已从「应用和功能」注销
+
+echo.
+echo   卸载完成，窗口关闭后会自动删除安装目录。
+start "" cmd /c "ping -n 3 127.0.0.1 >nul & rd /s /q \"%TARGET%\""
+exit

@@ -71,11 +71,12 @@
 - [x] 本地音乐扫描（扫描目录）
 - [x] 下载当前曲目到 ~/.bilimusic/downloads
 
-## M5 · 打包分发
+## M5 · 打包分发（已完成）
 
-- [ ] 内置 VLC（复用 Java 版打包脚本的 vlc/ 目录，369 文件 / 135MB）
-- [ ] 免安装 zip + 自解压安装器（7z SFX，思路同 Java 版 desktop/tools/build-exe.ps1）
-- [ ] 体积/内存/启动时间对比 Java 版，记录在 README
+- [x] 内置 VLC（复用 Java 版 portable 的 vlc/ 目录：libvlc + libvlccore + plugins，369 文件 / 135MB）
+- [x] 免安装 zip + 自解压安装器（官方 7zSD.sfx + py7zr 写 LZMA1 载荷，
+      `scripts/package.ps1`；安装脚本带桌面/开始菜单快捷方式与卸载注册项）
+- [x] 体积/内存/启动时间对比 Java 版，记录在 README（见下）
 
 ## 功能对等清单（用来判断什么时候能替换 Java 版）
 
@@ -89,7 +90,7 @@
 | 离线缓存 | 支持 | 待做 | M3 |
 | 沉浸模式 / 封面 / 歌词 | 支持 | 待做 | M4 |
 | 托盘 / 全局快捷键 / 防熄屏 | 支持 | 待做 | M4 |
-| 打包体积/内存 | Working Set 约 430MB | 待测 | M5 |
+| 打包体积/内存/启动 | zip 132.6MB、setup 102.7MB、Working Set ~430MB、启动 ~3.2s | zip 60.6MB、setup 37.3MB、Working Set 215–241MB、启动 0.66–0.81s | ✅ M5 |
 
 ## 技术决策记录
 

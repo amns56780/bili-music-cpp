@@ -11,3 +11,5 @@ out/
 *.exp
 compile_commands.json
 CMakeUserPresets.json
+dist/
+build/package/

@@ -176,6 +176,7 @@ bool VlcEngine::init(std::string* error) {
         return false;
     }
     api_ = api;
+    AppLog::info("VlcEngine", "VLC " + version() + "，内核目录 " + wideToUtf8(libraryDir_));
 
     // 优先使用 WASAPI 应用级音量：不经过 VLC，拖动音量条立即生效
     if (appVolume_.init()) {

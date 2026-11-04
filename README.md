@@ -111,7 +111,11 @@
         侧栏「播放缓存」可配置网络缓存范围（2/5/10/20 秒，默认 5）、清除播放缓存
   - [x] 左侧栏可折叠/展开（标题栏左侧箭头或 Ctrl+B，带宽度动画，状态记忆）
   - M4 核心项全部完成 ✅（歌词页 Java 版本身也没有做）
-- [ ] M5：打包（内置 VLC + 免安装 zip + 安装器）
+- [x] **M5：打包分发**
+  - 内置 VLC（复用 Java 版 portable 的 `vlc/`：libvlc + libvlccore + 369 个插件，135MB）
+  - 免安装 zip + 自解压安装器（官方 7zSD.sfx + LZMA1 载荷，`install.bat` / `uninstall.bat`）
+  - 实测：启动 **0.66–0.81s**、Working Set **215–241MB**、portable zip **60.6MB**、
+    setup.exe **37.3MB**（Java 版对应约 3.2s / 430MB / 132.6MB / 102.7MB）
 
 ## 构建
 
@@ -128,6 +132,34 @@ cmake --build build -j 8
 
 产物：`build\\bilimusic.exe`（运行时需要能加载 libVLC：优先找 exe 旁边的 `vlc\\libvlc.dll`，
 其次系统安装的 VLC；也可以设置环境变量 `BILIMUSIC_VLC_DIR` 指向 VLC 目录）。
+
+## 打包（M5）
+
+```powershell
+# 1) 需要 Python + py7zr（只用于生成 7z 载荷）：pip install py7zr
+# 2) 构建 + 打 zip + 打安装器 + 自检 + 冒烟测试
+.\scripts\package.ps1
+
+# 复用现有 build 产物（跳过重新编译）
+.\scripts\package.ps1 -SkipBuild
+```
+
+产物：
+
+| 文件 | 说明 |
+| --- | --- |
+| `build\dist\bilimusic-cpp-portable-win64.zip` | 免安装包（解压即用，内置 vlc/） |
+| `build\dist\bilimusic-cpp-setup.exe` | 自解压安装器：提取到临时目录后运行 install.bat，默认装到 `%LOCALAPPDATA%\Programs\bilimusic`，带桌面/开始菜单快捷方式和「应用和功能」卸载项 |
+
+实现说明：
+
+- SFX 模块用仓库内 `third_party/7zsd/7zSD.sfx`（7-Zip 9.20 安装器版，支持 config 的 `RunProgram`）；
+  `tools/7zip-extracted/7z.sfx` 是普通解压版、不支持 config，不要用错。
+- 该 SFX 模块只认 LZMA1，所以 `scripts/packaging/make_7z.py` 用 `py7zr` 以 LZMA1 写载荷；
+  免安装 zip 则用 PowerShell `Compress-Archive` 生成。
+- 打包脚本会自检：解压 zip、切出 setup 内嵌载荷并用 py7zr 解压、校验 `install.bat`/`uninstall.bat`，
+  最后从 staging 目录启动一次 exe 做冒烟测试，输出启动耗时与 Working Set。
+
 
 ## 目录结构
 
