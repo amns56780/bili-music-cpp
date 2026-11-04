@@ -32,6 +32,16 @@ public:
     bool playUrl(const std::string& url, const std::string& referrer,
                  const std::string& userAgent, std::string* error);                  // 网络流
 
+    // 音频输出设备（WASAPI/mmdevice）：列设备、切设备（换设备在下一首/恢复时生效）
+    struct AudioDevice {
+        std::string id;
+        std::string name;
+    };
+    std::vector<AudioDevice> audioOutputDevices() const;
+    void setAudioOutputDevice(const std::string& id) { outputDeviceId_ = id; }
+    std::string audioOutputDevice() const { return outputDeviceId_; }
+    void applyOutputDevice();  // 对当前播放器应用已选设备
+
     void togglePause();
     void resumeByPlay();  // 用 libvlc_media_player_play 恢复（自检对比用）
     void pause();
@@ -65,6 +75,7 @@ private:
     // 恢复前先 seek 到当前位置强制刷新 demux/音频输出。
     bool pausedRequested_ = false;
     std::chrono::steady_clock::time_point pausedAt_{};
+    std::string outputDeviceId_;
 
     media::AppVolume appVolume_;
     bool sessionVolumeEnabled_ = false;

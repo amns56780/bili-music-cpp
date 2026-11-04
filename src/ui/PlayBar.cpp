@@ -210,7 +210,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         actions->openSleepTimer = true;
     }
     ImGui::SetCursorPos(ImVec2(rightLeft + 258.0f, rightCenterY - 14.0f));
-    if (IconButton("queue", Icons::PlaylistPlay, 28.0f, 16.0f, Colors::Text2, false, true, "播放队列（M4）")) {
+    if (IconButton("queue", Icons::PlaylistPlay, 28.0f, 16.0f, Colors::Text2, false, true, "播放队列")) {
         actions->openQueue = true;
     }
 }

@@ -28,6 +28,9 @@ public:
     void playNext();
     void playPrevious();
 
+    // 防熄屏用：当前是否在出声
+    bool playbackActive() const { return playing_ && hasMedia_; }
+
 private:
     struct AsyncEvent {
         enum class Kind {
@@ -126,6 +129,15 @@ private:
     void finishImport(const AsyncEvent& event);
     void applyMultiAction(long long targetPlaylistId);
     void chooseLocalCover();
+
+    // M4：定时关闭 / 播放队列 / 输出设备 / 沉浸模式
+    void startSleepTimer(int minutes);
+    void cancelSleepTimer();
+    void checkSleepTimer();
+    void refreshOutputDevices();
+    void applyOutputDevice(const std::string& id);
+    void toggleImmersive();
+    void drawImmersive();
     void startDownloadCurrent();
     void prefetchNextSong();
     void scanLocalMusic();
@@ -252,4 +264,19 @@ private:
     bool targetPlaylistDialogRequested_ = false;
     bool deleteSongsDialogRequested_ = false;
     bool coverSongDialogRequested_ = false;
+
+    // M4
+    bool sleepDialogRequested_ = false;
+    bool sleepTimerActive_ = false;
+    uint64_t sleepTimerEndTick_ = 0;
+    int sleepTimerMinutes_ = 0;
+    bool queueDialogRequested_ = false;
+    bool outputDeviceDialogRequested_ = false;
+    std::vector<std::pair<std::string, std::string>> outputDevices_;  // id, 名称
+    std::string selectedOutputDeviceId_;
+    bool immersive_ = false;
+    int savedWindowX_ = 0;
+    int savedWindowY_ = 0;
+    int savedWindowW_ = 1240;
+    int savedWindowH_ = 860;
 };

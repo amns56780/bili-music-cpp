@@ -77,6 +77,13 @@ struct VlcEngine::Api {
     void (*libvlc_media_player_set_time)(void* player, int64_t time);
     int (*libvlc_audio_set_volume)(void* player, int volume);
     int (*libvlc_audio_get_volume)(void* player);
+    void* (*libvlc_audio_output_device_enum)(void* player);
+    void (*libvlc_audio_output_device_list_release)(void* list);
+    int (*libvlc_audio_output_device_count)(void* instance, const char* module);
+    char* (*libvlc_audio_output_device_longname)(void* instance, const char* module, int index);
+    char* (*libvlc_audio_output_device_id)(void* instance, const char* module, int index);
+    void (*libvlc_audio_output_device_set)(void* player, const char* module, const char* deviceId);
+    void (*libvlc_free)(void* pointer);
 };
 
 VlcEngine::VlcEngine() = default;
@@ -141,11 +148,24 @@ bool VlcEngine::init(std::string* error) {
     resolveSymbol(module, "libvlc_media_player_set_time", api->libvlc_media_player_set_time, ok, error);
     resolveSymbol(module, "libvlc_audio_set_volume", api->libvlc_audio_set_volume, ok, error);
     resolveSymbol(module, "libvlc_audio_get_volume", api->libvlc_audio_get_volume, ok, error);
+    resolveSymbol(module, "libvlc_audio_output_device_enum", api->libvlc_audio_output_device_enum,
+                  ok, error);
+    resolveSymbol(module, "libvlc_audio_output_device_list_release",
+                  api->libvlc_audio_output_device_list_release, ok, error);
+    resolveSymbol(module, "libvlc_audio_output_device_count", api->libvlc_audio_output_device_count,
+                  ok, error);
+    resolveSymbol(module, "libvlc_audio_output_device_longname",
+                  api->libvlc_audio_output_device_longname, ok, error);
+    resolveSymbol(module, "libvlc_audio_output_device_id", api->libvlc_audio_output_device_id, ok,
+                  error);
+    resolveSymbol(module, "libvlc_audio_output_device_set", api->libvlc_audio_output_device_set, ok,
+                  error);
+    resolveSymbol(module, "libvlc_free", api->libvlc_free, ok, error);
     if (!ok) { delete api; return false; }
 
     // 和 Java 版一致：不做视频、安静启动、只播音频
     // 自检时可以用 BILIMUSIC_VLC_VERBOSE=1 打开 VLC 日志（排查暂停/恢复、aout 重建）
-    std::vector<const char*> args = {"--no-video", "--quiet", "--intf=dummy"};
+    std::vector<const char*> args = {"--no-video", "--quiet", "--intf=dummy", "--aout=mmdevice"};
     if (std::getenv("BILIMUSIC_VLC_VERBOSE") != nullptr) {
         args = {"--no-video", "--verbose=2", "--intf=dummy"};
     }
@@ -216,6 +236,7 @@ bool VlcEngine::playPath(const std::wstring& path, std::string* error) {
         appendError(error, "创建播放器失败");
         return false;
     }
+    applyOutputDevice();
     if (api_->libvlc_media_player_play(player_) != 0) {
         appendError(error, "启动播放失败");
         return false;
@@ -260,6 +281,7 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
         appendError(error, "创建播放器失败");
         return false;
     }
+    applyOutputDevice();
     if (api_->libvlc_media_player_play(player_) != 0) {
         appendError(error, "启动播放失败");
         return false;
@@ -271,6 +293,56 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
     volumeDirty_ = true;
     pumpVolume();
     return true;
+}
+
+
+std::vector<VlcEngine::AudioDevice> VlcEngine::audioOutputDevices() const {
+    std::vector<AudioDevice> devices;
+    if (!api_) return devices;
+    // VLC 3 的设备列表挂在 player 上（mmdevice 模块在播放器创建后才会初始化）
+    struct DeviceNode {
+        DeviceNode* next;
+        char* device;
+        char* description;
+    };
+    if (player_ != nullptr && api_->libvlc_audio_output_device_enum != nullptr &&
+        api_->libvlc_audio_output_device_list_release != nullptr) {
+        auto* node = static_cast<DeviceNode*>(api_->libvlc_audio_output_device_enum(player_));
+        for (auto* current = node; current != nullptr; current = current->next) {
+            AudioDevice device;
+            if (current->device != nullptr) device.id = current->device;
+            if (current->description != nullptr) device.name = current->description;
+            if (device.name.empty()) device.name = device.id;
+            if (!device.id.empty()) devices.push_back(std::move(device));
+        }
+        if (node != nullptr) api_->libvlc_audio_output_device_list_release(node);
+        if (!devices.empty()) return devices;
+    }
+    if (instance_ != nullptr && api_->libvlc_audio_output_device_count != nullptr) {
+        auto enumerate = [&](const char* module) {
+            devices.clear();
+            const int count = api_->libvlc_audio_output_device_count(instance_, module);
+            for (int i = 0; i < count; ++i) {
+                char* longName = api_->libvlc_audio_output_device_longname(instance_, module, i);
+                char* deviceId = api_->libvlc_audio_output_device_id(instance_, module, i);
+                AudioDevice device;
+                if (deviceId != nullptr) device.id = deviceId;
+                if (longName != nullptr) device.name = longName;
+                if (device.name.empty()) device.name = device.id;
+                if (deviceId != nullptr) api_->libvlc_free(deviceId);
+                if (longName != nullptr) api_->libvlc_free(longName);
+                if (!device.id.empty()) devices.push_back(std::move(device));
+            }
+        };
+        enumerate("mmdevice");
+        if (devices.empty()) enumerate(nullptr);
+    }
+    return devices;
+}
+
+void VlcEngine::applyOutputDevice() {
+    if (!api_ || !player_ || outputDeviceId_.empty()) return;
+    api_->libvlc_audio_output_device_set(player_, "mmdevice", outputDeviceId_.c_str());
 }
 
 void VlcEngine::pause() {

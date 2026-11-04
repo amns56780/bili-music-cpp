@@ -26,6 +26,7 @@
 
 #include "net/HttpClient.h"
 #include "ui/Components.h"
+#include "ui/ImageCache.h"
 #include "ui/PlayBar.h"
 #include "ui/PlaylistPage.h"
 #include "ui/Sidebar.h"
@@ -285,6 +286,8 @@ void App::init(GLFWwindow* window) {
     if (!engine_.init(&engineError)) {
         setStatus("VLC 内核加载失败：" + engineError, true);
     }
+    selectedOutputDeviceId_ = bili_.getSetting("audio.outputDevice");
+    if (!selectedOutputDeviceId_.empty()) engine_.setAudioOutputDevice(selectedOutputDeviceId_);
 
     std::string loadError;
     if (!store_.load(&loadError)) {
@@ -533,6 +536,191 @@ void App::syncPlaybackState() {
     engine_.pumpVolume();
     volume_ = engine_.volume();
     checkPlaybackStall();
+}
+
+void App::startSleepTimer(int minutes) {
+    if (minutes <= 0) {
+        cancelSleepTimer();
+        return;
+    }
+    sleepTimerActive_ = true;
+    sleepTimerMinutes_ = minutes;
+    sleepTimerEndTick_ = GetTickCount64() + (uint64_t)minutes * 60000ULL;
+    setStatus("定时关闭：将在 " + std::to_string(minutes) + " 分钟后暂停播放");
+}
+
+void App::cancelSleepTimer() {
+    if (!sleepTimerActive_) return;
+    sleepTimerActive_ = false;
+    sleepTimerEndTick_ = 0;
+    sleepTimerMinutes_ = 0;
+    setStatus("已取消定时关闭");
+}
+
+void App::checkSleepTimer() {
+    if (!sleepTimerActive_) return;
+    if (GetTickCount64() < sleepTimerEndTick_) return;
+    sleepTimerActive_ = false;
+    sleepTimerEndTick_ = 0;
+    sleepTimerMinutes_ = 0;
+    if (engine_.isPlaying()) engine_.pause();
+    stallWatchStartTick_ = 0;
+    setStatus("定时关闭：已暂停播放");
+    AppLog::info("App", "定时关闭触发，已暂停播放");
+}
+
+void App::refreshOutputDevices() {
+    outputDevices_.clear();
+    for (const VlcEngine::AudioDevice& device : engine_.audioOutputDevices()) {
+        outputDevices_.emplace_back(device.id, device.name);
+    }
+    AppLog::info("App", "音频输出设备：" + std::to_string(outputDevices_.size()) + " 个");
+}
+
+void App::applyOutputDevice(const std::string& id) {
+    selectedOutputDeviceId_ = id;
+    engine_.setAudioOutputDevice(id);
+    engine_.applyOutputDevice();
+    bili_.setSetting("audio.outputDevice", id);
+    std::string name = "默认设备";
+    for (const auto& device : outputDevices_) {
+        if (device.first == id) name = device.second;
+    }
+    setStatus("输出设备：" + name);
+    AppLog::info("App", "切换输出设备：" + name + " (" + id + ")");
+}
+
+void App::toggleImmersive() {
+    if (window_ == nullptr) return;
+    if (!immersive_) {
+        glfwGetWindowPos(window_, &savedWindowX_, &savedWindowY_);
+        glfwGetWindowSize(window_, &savedWindowW_, &savedWindowH_);
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        if (monitor == nullptr) return;
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        if (mode == nullptr) return;
+        glfwSetWindowMonitor(window_, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+        immersive_ = true;
+        AppLog::info("App", "进入沉浸模式（全屏）");
+    } else {
+        glfwSetWindowMonitor(window_, nullptr, savedWindowX_, savedWindowY_, savedWindowW_,
+                             savedWindowH_, GLFW_DONT_CARE);
+        immersive_ = false;
+        AppLog::info("App", "退出沉浸模式");
+    }
+}
+
+void App::drawImmersive() {
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 display = io.DisplaySize;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float width = display.x;
+    const float height = display.y;
+    const float centerX = width * 0.5f;
+    // 全屏分辨率比窗口大：按 1240x860 的设计稿等比放大
+    const float scale = std::min(width / 1240.0f, height / 860.0f);
+    auto px = [scale](float value) { return value * scale; };
+
+    const StoredSong* song = findSong(playingSongId_);
+    std::string coverUrl;
+    std::string coverPath;
+    std::string playlistTitle;
+    if (song != nullptr) coverUrl = song->coverUrl;
+    if (const StoredPlaylist* playlist = currentPlaylist()) {
+        playlistTitle = playlist->title;
+        if (coverUrl.empty()) {
+            coverUrl = playlist->coverUrl;
+            coverPath = playlist->coverPath;
+        }
+    }
+
+    const ImTextureID background = Ui::CoverTextureFor(coverUrl, coverPath);
+    if (background != 0) {
+        draw->AddImage(background, ImVec2(0, 0), display);
+    } else {
+        Ui::CoverPlaceholder(playingTitle_.empty() ? "♪" : playingTitle_, ImVec2(0, 0), height, 0.0f);
+    }
+    draw->AddRectFilled(ImVec2(0, 0), display, IM_COL32(8, 8, 10, 200));
+
+    const std::string title = playingTitle_.empty() ? "还没有在播放" : playingTitle_;
+    const std::string artist = playingArtist_.empty() ? playlistTitle : playingArtist_;
+
+    const float coverSize = px(320.0f);
+    const float coverX = centerX - coverSize * 0.5f;
+    const float coverY = px(56.0f);
+    Ui::CoverImage(title, ImVec2(coverX, coverY), coverSize, px(16.0f), coverUrl, coverPath);
+
+    const float textY = coverY + coverSize + px(26.0f);
+    Ui::TextEllipsis(title, px(760.0f), Ui::GetFonts().xl, Ui::Colors::Text,
+                     ImVec2(centerX - px(380.0f), textY));
+    draw->AddText(Ui::GetFonts().body, px(18.0f),
+                  ImVec2(centerX - Ui::MeasureText(Ui::GetFonts().body, 18.0f, artist) * 0.5f,
+                         textY + px(48.0f)),
+                  Ui::Colors::Text2, artist.c_str());
+
+    const float progressY = textY + px(96.0f);
+    static bool immerseSeeking = false;
+    static float immerseDraft = 0.0f;
+    const float ratio = durationMs_ > 0.0 ? (float)(positionMs_ / durationMs_) : 0.0f;
+    const float progressWidth = px(560.0f);
+    ImGui::SetCursorPos(ImVec2(centerX - progressWidth * 0.5f, progressY));
+    float sliderValue = immerseSeeking ? immerseDraft
+                                       : (ratio < 0.0f ? 0.0f : (ratio > 1.0f ? 1.0f : ratio));
+    const Ui::SliderResult seekResult =
+        Ui::ThinSlider("##immerse_seek", &sliderValue, progressWidth, px(14.0f), px(5.0f),
+                       Ui::Colors::Brand);
+    if (seekResult.changed) {
+        immerseSeeking = true;
+        immerseDraft = sliderValue;
+    }
+    if (seekResult.finished) {
+        immerseSeeking = false;
+        engine_.seekMs((int64_t)(sliderValue * durationMs_));
+    }
+    auto formatTime = [](double ms) {
+        if (ms < 0.0) ms = 0.0;
+        const int64_t totalSeconds = (int64_t)(ms / 1000.0);
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%lld:%02lld", (long long)(totalSeconds / 60),
+                      (long long)(totalSeconds % 60));
+        return std::string(buffer);
+    };
+    const double shownPosition = immerseSeeking ? immerseDraft * durationMs_ : positionMs_;
+    draw->AddText(Ui::GetFonts().small, px(15.0f),
+                  ImVec2(centerX - progressWidth * 0.5f, progressY + px(22.0f)),
+                  Ui::Colors::Text3, formatTime(shownPosition).c_str());
+    const std::string durationText = formatTime(durationMs_);
+    draw->AddText(Ui::GetFonts().small, px(15.0f),
+                  ImVec2(centerX + progressWidth * 0.5f -
+                             Ui::MeasureText(Ui::GetFonts().small, 15.0f, durationText),
+                         progressY + px(22.0f)),
+                  Ui::Colors::Text3, durationText.c_str());
+
+    const float controlsY = progressY + px(62.0f);
+    ImGui::SetCursorPos(ImVec2(centerX - px(120.0f), controlsY));
+    if (Ui::IconButton("immerse_prev", Icons::SkipPrevious, px(44.0f), px(26.0f),
+                       Ui::Colors::Text, false, hasMedia_, "上一首")) {
+        playPrevious();
+    }
+    ImGui::SetCursorPos(ImVec2(centerX - px(24.0f), controlsY - px(8.0f)));
+    if (Ui::PlayCircleButton("immerse_play", playing_, px(48.0f))) togglePlayback();
+    ImGui::SetCursorPos(ImVec2(centerX + px(76.0f), controlsY));
+    if (Ui::IconButton("immerse_next", Icons::SkipNext, px(44.0f), px(26.0f),
+                       Ui::Colors::Text, false, hasMedia_, "下一首")) {
+        playNext();
+    }
+
+    ImGui::SetCursorPos(ImVec2(width - px(60.0f), px(20.0f)));
+    if (Ui::IconButton("immerse_exit", Icons::FullscreenExit, px(36.0f), px(20.0f),
+                       Ui::Colors::Text2, false, true, "退出沉浸模式（Esc）")) {
+        toggleImmersive();
+    }
+
+    const std::string hint = "F11 / Esc 退出沉浸模式";
+    draw->AddText(Ui::GetFonts().small, px(15.0f),
+                  ImVec2(centerX - Ui::MeasureText(Ui::GetFonts().small, 15.0f, hint) * 0.5f,
+                         height - px(34.0f)),
+                  Ui::Colors::Text3, hint.c_str());
 }
 
 void App::togglePlayback() {
@@ -1567,6 +1755,103 @@ void App::drawM3Dialogs() {
         ImGui::EndPopup();
     }
 
+    // ---- 定时关闭 ----
+    if (sleepDialogRequested_) ImGui::OpenPopup("定时关闭");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("定时关闭", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!sleepDialogRequested_) ImGui::CloseCurrentPopup();
+        if (sleepTimerActive_) {
+            const uint64_t nowTick = GetTickCount64();
+            const uint64_t remainingMs =
+                sleepTimerEndTick_ > nowTick ? sleepTimerEndTick_ - nowTick : 0;
+            ImGui::Text("将在约 %d 分钟后暂停播放", (int)((remainingMs + 59999) / 60000));
+        } else {
+            ImGui::TextUnformatted("选择多久后暂停播放：");
+        }
+        ImGui::Spacing();
+        const int minuteOptions[] = {15, 30, 60, 90, 120};
+        for (int i = 0; i < 5; ++i) {
+            const std::string label = std::to_string(minuteOptions[i]) + " 分钟";
+            if (ImGui::Button(label.c_str(), ImVec2(120.0f, 32.0f))) {
+                startSleepTimer(minuteOptions[i]);
+                sleepDialogRequested_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            if (i % 3 != 2) ImGui::SameLine();
+        }
+        ImGui::Spacing();
+        if (sleepTimerActive_ && ImGui::Button("取消定时", ImVec2(120.0f, 32.0f))) {
+            cancelSleepTimer();
+        }
+        if (sleepTimerActive_) ImGui::SameLine();
+        if (ImGui::Button("关闭", ImVec2(120.0f, 32.0f))) {
+            sleepDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- 播放队列 ----
+    if (queueDialogRequested_) ImGui::OpenPopup("播放队列");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("播放队列", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!queueDialogRequested_) ImGui::CloseCurrentPopup();
+        const std::vector<const StoredSong*> queueSongs = currentSongs();
+        const StoredPlaylist* queuePlaylist = currentPlaylist();
+        ImGui::Text("当前歌单：%s · %d 首",
+                    queuePlaylist != nullptr ? Ui::DisplayText(queuePlaylist->title).c_str() : "-",
+                    (int)queueSongs.size());
+        long long pendingQueueSong = -1;
+        ImGui::BeginChild("##queue_list", ImVec2(460.0f, 320.0f), ImGuiChildFlags_Borders);
+        for (size_t i = 0; i < queueSongs.size(); ++i) {
+            const StoredSong& queueSong = *queueSongs[i];
+            const bool isCurrent = queueSong.id == playingSongId_;
+            std::string label = std::to_string(i + 1) + ". " + Ui::DisplayText(queueSong.title);
+            if (isCurrent) label = "▶ " + label;
+            if (ImGui::Selectable(label.c_str(), isCurrent)) pendingQueueSong = queueSong.id;
+        }
+        ImGui::EndChild();
+        ImGui::Spacing();
+        if (ImGui::Button("关闭", ImVec2(110.0f, 32.0f))) {
+            queueDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        if (pendingQueueSong >= 0) playSongById(pendingQueueSong);
+        ImGui::EndPopup();
+    }
+
+    // ---- 输出设备 ----
+    if (outputDeviceDialogRequested_) ImGui::OpenPopup("输出设备");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("输出设备", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!outputDeviceDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextUnformatted("选择音频输出设备（下一首 / 重新播放后生效）：");
+        bool pendingChosen = false;
+        std::string pendingDeviceId;
+        ImGui::BeginChild("##output_list", ImVec2(460.0f, 240.0f), ImGuiChildFlags_Borders);
+        if (ImGui::Selectable("默认设备（系统）", selectedOutputDeviceId_.empty())) {
+            pendingChosen = true;
+            pendingDeviceId.clear();
+        }
+        for (const auto& device : outputDevices_) {
+            const bool selected = device.first == selectedOutputDeviceId_;
+            if (ImGui::Selectable(Ui::DisplayText(device.second).c_str(), selected)) {
+                pendingChosen = true;
+                pendingDeviceId = device.first;
+            }
+        }
+        ImGui::EndChild();
+        ImGui::Spacing();
+        if (ImGui::Button("刷新", ImVec2(110.0f, 32.0f))) refreshOutputDevices();
+        ImGui::SameLine();
+        if (ImGui::Button("关闭", ImVec2(110.0f, 32.0f))) {
+            outputDeviceDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        if (pendingChosen) applyOutputDevice(pendingDeviceId);
+        ImGui::EndPopup();
+    }
+
     // ---- 收藏夹选择 ----
     if (favFolderDialogRequested_) ImGui::OpenPopup("选择收藏夹");
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -1776,10 +2061,13 @@ void App::drawDialogs() {
 void App::draw() {
     pollAsync();
     syncPlaybackState();
+    checkSleepTimer();
 
     ImGuiIO& io = ImGui::GetIO();
 
-    // 窗口内快捷键：空格 = 播放/暂停，[ = 上一首，] = 下一首（输入框/弹窗时不触发）
+    // 窗口内快捷键：空格 = 播放/暂停，←/→（或 [ ]）= 切歌，F11 = 沉浸模式，Esc = 退出沉浸
+    if (ImGui::IsKeyPressed(ImGuiKey_F11, false)) toggleImmersive();
+    if (immersive_ && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) toggleImmersive();
     if (!io.WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) togglePlayback();
         if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) ||
@@ -1804,9 +2092,15 @@ void App::draw() {
                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
     ImGui::Begin("##root", nullptr, rootFlags);
 
+    if (immersive_) {
+        drawImmersive();
+        ImGui::End();
+        return;
+    }
+
     const bool maximized = Ui::WindowIsMaximized(window_);
     ImGui::SetCursorPos(ImVec2(0, 0));
-    Ui::DrawTitleBar(window_, maximized);
+    if (Ui::DrawTitleBar(window_, maximized, immersive_)) toggleImmersive();
 
     // ---------------- 侧栏 ----------------
     ImGui::SetCursorPos(ImVec2(0, titleBarHeight));
@@ -1858,6 +2152,7 @@ void App::draw() {
     playBarData.qualityId = qualityId_;
     playBarData.qualityLabel =
         qualityNameForId(lastStreamQualityId_ > 0 ? lastStreamQualityId_ : qualityId_);
+    playBarData.immersive = immersive_;
     Ui::PlayBarActions playBarActions;
     Ui::DrawPlayBar(playBarData, &playBarActions, io.DisplaySize.x, playerHeight);
     ImGui::EndChild();
@@ -1966,7 +2261,11 @@ void App::draw() {
     }
     if (playBarActions.qualitySelected) applyQualitySelection(playBarActions.qualityId);
     if (playBarActions.download) startDownloadCurrent();
-    if (playBarActions.openQueue) setStatus("播放队列：M4 实现");
-    if (playBarActions.openSleepTimer) setStatus("定时关闭：M4 实现");
-    if (playBarActions.openOutputDevice) setStatus("输出设备：M4 实现");
+    if (playBarActions.openQueue) queueDialogRequested_ = true;
+    if (playBarActions.openSleepTimer) sleepDialogRequested_ = true;
+    if (playBarActions.openOutputDevice) {
+        refreshOutputDevices();
+        outputDeviceDialogRequested_ = true;
+    }
+    if (playBarActions.toggleImmersive) toggleImmersive();
 }

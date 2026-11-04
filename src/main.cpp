@@ -248,8 +248,17 @@ int main(int argc, char** argv) {
     };
     tray.init("bilimusic", trayCallbacks);
 
+    bool preventSleep = false;
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        // 播放时阻止熄屏/休眠（M4）
+        const bool wantPreventSleep = app.playbackActive();
+        if (wantPreventSleep != preventSleep) {
+            SetThreadExecutionState(wantPreventSleep
+                                        ? (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+                                        : ES_CONTINUOUS);
+            preventSleep = wantPreventSleep;
+        }
         if (glfwWindowShouldClose(window)) {
             // 关闭按钮 = 收进托盘（托盘退出才真正退出）
             if (!exitRequested && tray.active()) {
@@ -282,6 +291,7 @@ int main(int argc, char** argv) {
         glfwSwapBuffers(window);
     }
 
+    SetThreadExecutionState(ES_CONTINUOUS);
     tray.shutdown();
     app.shutdown();
     ImGui_ImplOpenGL3_Shutdown();

@@ -17,6 +17,7 @@ struct PlayBarData {
     // 当前曲目封面（优先视频封面，没有就退化成歌单封面）
     std::string coverUrl;
     std::string coverPath;
+    bool immersive = false;  // 沉浸模式：全屏按钮显示「退出全屏」图标
     // 在线曲目才有音质档位
     bool showQuality = false;
     int qualityId = 0;  // 0=自动，其它为 B 站音质 id（30280/30232/30216/30251/30250）
@@ -36,6 +37,7 @@ struct PlayBarActions {
     bool openQueue = false;
     bool openOutputDevice = false;
     bool openSleepTimer = false;
+    bool toggleImmersive = false;
     bool connectDevice = false;
     bool download = false;
     bool qualitySelected = false;
