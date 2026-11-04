@@ -310,12 +310,15 @@ bool PrimaryButton(const char* id, const std::string& label, uint32_t icon, floa
     draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
                         hovered ? Colors::BrandHover : Colors::Brand, height / 2);
     float x = pos.x + (width - (labelWidth + iconWidth)) / 2;
+    // 文字/图标墨迹整体比行框低约 1px，统一上移 1px 让上下留白一致
     if (!glyph.empty()) {
-        drawTextAt(GetFonts().body, 17.0f, ImVec2(x, pos.y + iconTextTopForCenter(height, 17.0f)),
-                   Colors::White, glyph);
+        drawTextAt(GetFonts().body, 17.0f,
+                   ImVec2(x, pos.y + iconTextTopForCenter(height, 17.0f) - 1.0f), Colors::White,
+                   glyph);
         x += iconWidth;
     }
-    drawTextAt(GetFonts().body, 18.0f, ImVec2(x, pos.y + (height - 18.0f) / 2), Colors::White, label);
+    drawTextAt(GetFonts().body, 18.0f,
+               ImVec2(x, pos.y + (height - 18.0f) / 2.0f - 1.0f), Colors::White, label);
     (void)font;
     ImGui::PopID();
     return pressed;
@@ -337,11 +340,13 @@ bool GhostButton(const char* id, const std::string& label, uint32_t icon, float 
     }
     float x = pos.x + (width - (labelWidth + iconWidth)) / 2;
     if (!glyph.empty()) {
-        drawTextAt(GetFonts().body, 17.0f, ImVec2(x, pos.y + iconTextTopForCenter(height, 17.0f)),
-                   Colors::Text2, glyph);
+        drawTextAt(GetFonts().body, 17.0f,
+                   ImVec2(x, pos.y + iconTextTopForCenter(height, 17.0f) - 1.0f), Colors::Text2,
+                   glyph);
         x += iconWidth;
     }
-    drawTextAt(GetFonts().body, 18.0f, ImVec2(x, pos.y + (height - 18.0f) / 2), Colors::Text2, label);
+    drawTextAt(GetFonts().body, 18.0f,
+               ImVec2(x, pos.y + (height - 18.0f) / 2.0f - 1.0f), Colors::Text2, label);
     ImGui::PopID();
     return pressed;
 }

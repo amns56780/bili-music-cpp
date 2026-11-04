@@ -263,9 +263,9 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
         appendError(error, "无法打开网络地址");
         return false;
     }
-    // 网络流缓存：默认 1000ms 在「暂停 → 恢复」时容易把缓冲耗干，恢复瞬间断断续续。
-    // 加大到 5s 让恢复后先有足够的缓冲；http-reconnect 让连接断掉时自动重连。
-    api_->libvlc_media_add_option(media_, ":network-caching=20000");
+    // 网络流缓存：可配置（设置里选 2/5/10/20 秒）；越大抗卡顿越好，但 seek 后重新出声越慢。
+    const std::string cacheOption = ":network-caching=" + std::to_string(networkCacheMs_);
+    api_->libvlc_media_add_option(media_, cacheOption.c_str());
     api_->libvlc_media_add_option(media_, ":http-reconnect=true");
     // 网络音频时钟抖动相关：减少恢复播放后的断续/卡顿
     api_->libvlc_media_add_option(media_, ":clock-jitter=0");

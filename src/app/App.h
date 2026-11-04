@@ -33,6 +33,7 @@ public:
 
     // 播放/进度乐观 UI 用（减少按钮与进度条的延迟感）
     void requestSeekPreview(double positionMs);
+    void seekRelative(double seconds);
 
     // 关闭窗口（收进托盘）时也保存窗口位置/大小，下次启动沿用
     void saveWindowState();
@@ -288,6 +289,10 @@ private:
     uint64_t playbackOverrideUntil_ = 0;
     double seekPreviewMs_ = -1.0;
     uint64_t seekPreviewUntil_ = 0;
+
+    // 播放缓存范围（秒）：2/5/10/20，写入 audio.network_cache
+    int networkCacheSeconds_ = 5;
+    bool cacheSettingsDialogRequested_ = false;
 
     bool immersiveOpen_ = false;
     bool immersiveClosing_ = false;

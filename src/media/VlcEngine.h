@@ -32,6 +32,10 @@ public:
     bool playUrl(const std::string& url, const std::string& referrer,
                  const std::string& userAgent, std::string* error);                  // 网络流
 
+    // 网络缓存范围（毫秒）：越大越抗卡顿，但拖动进度条后重新出声越慢
+    void setNetworkCacheMs(int ms) { networkCacheMs_ = ms < 1000 ? 1000 : ms; }
+    int networkCacheMs() const { return networkCacheMs_; }
+
     // 音频输出设备（WASAPI/mmdevice）：列设备、切设备（换设备在下一首/恢复时生效）
     struct AudioDevice {
         std::string id;
@@ -76,6 +80,7 @@ private:
     bool pausedRequested_ = false;
     std::chrono::steady_clock::time_point pausedAt_{};
     std::string outputDeviceId_;
+    int networkCacheMs_ = 5000;
 
     media::AppVolume appVolume_;
     bool sessionVolumeEnabled_ = false;

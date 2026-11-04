@@ -294,6 +294,18 @@ void App::init(GLFWwindow* window) {
     selectedOutputDeviceId_ = bili_.getSetting("audio.outputDevice");
     if (!selectedOutputDeviceId_.empty()) engine_.setAudioOutputDevice(selectedOutputDeviceId_);
 
+    // 播放缓存范围（秒）：没有配置时默认 5 秒（seek 更快；旧版本是写死 20 秒）
+    {
+        const std::string cacheSetting = bili_.getSetting("audio.network_cache");
+        if (!cacheSetting.empty()) {
+            try {
+                networkCacheSeconds_ = std::max(1, std::min(60, std::stoi(cacheSetting)));
+            } catch (const std::exception&) {
+            }
+        }
+        engine_.setNetworkCacheMs(networkCacheSeconds_ * 1000);
+    }
+
     // 恢复音量与窗口位置/大小（Java 版同款 key）
     const std::string savedVolume = bili_.getSetting("desktop.volume");
     if (!savedVolume.empty()) {
@@ -576,6 +588,20 @@ void App::stepSong(int direction) {
         if (mode_ == 2) break;
     }
     setStatus("附近没有可播放的曲目", true);
+}
+
+void App::seekRelative(double seconds) {
+    if (!hasMedia_ || durationMs_ <= 0.0) return;
+    const double base = seekPreviewMs_ >= 0.0 ? seekPreviewMs_ : positionMs_;
+    double target = base + seconds * 1000.0;
+    if (target < 0.0) target = 0.0;
+    if (target > durationMs_) target = durationMs_ > 1000.0 ? durationMs_ - 1000.0 : 0.0;
+    engine_.seekMs((int64_t)target);
+    requestSeekPreview(target);
+    AppLog::info("App", std::string(seconds < 0 ? "快退 " : "快进 ") +
+                            std::to_string((int)std::abs(seconds)) + " 秒");
+    setStatus(std::string(seconds < 0 ? "快退 " : "快进 ") +
+              std::to_string((int)std::abs(seconds)) + " 秒");
 }
 
 void App::requestSeekPreview(double positionMs) {
@@ -2287,6 +2313,47 @@ void App::drawM3Dialogs() {
         ImGui::EndPopup();
     }
 
+    // ---- 播放缓存设置 ----
+    if (cacheSettingsDialogRequested_) ImGui::OpenPopup("播放缓存");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("播放缓存", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!cacheSettingsDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextUnformatted("拖动进度条后多久能听到声音，取决于网络缓存范围：");
+        ImGui::TextDisabled("缓存越大越抗卡顿，但 seek 后重新出声越慢；下一首 / 重新播放后生效。");
+        ImGui::Spacing();
+        const int options[] = {2, 5, 10, 20};
+        const int previous = networkCacheSeconds_;
+        for (int seconds : options) {
+            const bool selected = networkCacheSeconds_ == seconds;
+            const std::string label = "缓存 " + std::to_string(seconds) + " 秒" +
+                                      (seconds == 5 ? "（推荐）" : "");
+            if (ImGui::Selectable(label.c_str(), selected)) {
+                networkCacheSeconds_ = seconds;
+                engine_.setNetworkCacheMs(seconds * 1000);
+                bili_.setSetting("audio.network_cache", std::to_string(seconds));
+                setStatus("播放缓存：" + std::to_string(seconds) + " 秒（下一首 / 重新播放生效）");
+                cacheSettingsDialogRequested_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::Spacing();
+        if (currentIsOnline_ && !curBvid_.empty() && curCid_ > 0) {
+            if (ImGui::Button("重新加载当前曲目", ImVec2(160.0f, 32.0f))) {
+                pendingSeekMs_ = positionMs_;
+                cacheSettingsDialogRequested_ = false;
+                ImGui::CloseCurrentPopup();
+                startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
+            }
+            ImGui::SameLine();
+        }
+        if (ImGui::Button("关闭", ImVec2(110.0f, 32.0f))) {
+            cacheSettingsDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        (void)previous;
+        ImGui::EndPopup();
+    }
+
     // ---- 定时关闭 ----
     if (sleepDialogRequested_) ImGui::OpenPopup("定时关闭");
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -2602,27 +2669,21 @@ void App::draw() {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) closeImmersive();
         if (ImGui::IsKeyPressed(ImGuiKey_F11, false)) toggleImmersiveFullscreen();
         if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) togglePlayback();
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) ||
-            ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
-            playPrevious();
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false) ||
-            ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
-            playNext();
-        }
+        // [ / ] 切歌；← / → 快退/快进 3 秒
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false)) playPrevious();
+        if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) playNext();
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) seekRelative(-3.0);
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) seekRelative(3.0);
     }
     // 窗口内快捷键：空格 = 播放/暂停，←/→（或 [ ]）= 切歌，F11 = 全屏
     if (!immersiveOpen_ && ImGui::IsKeyPressed(ImGuiKey_F11, false)) toggleImmersiveFullscreen();
     if (!immersiveOpen_ && !io.WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) togglePlayback();
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) ||
-            ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
-            playPrevious();
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false) ||
-            ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
-            playNext();
-        }
+        // [ / ] 切歌；← / → 快退/快进 3 秒
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false)) playPrevious();
+        if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) playNext();
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) seekRelative(-3.0);
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) seekRelative(3.0);
     }
     const float titleBarHeight = Ui::Dimens::TitleBarHeight;
     const float playerHeight = Ui::Dimens::PlayerHeight;
@@ -2784,6 +2845,7 @@ void App::draw() {
     if (pageActions.pickCoverFromSong) coverSongDialogRequested_ = true;
     if (pageActions.pickCoverFromFile) chooseLocalCover();
     if (pageActions.scanLocalMusic) scanLocalMusic();
+    if (pageActions.requestCacheSettings) cacheSettingsDialogRequested_ = true;
     if (pageActions.selectMode) setStatus("多选 / 复制 / 移动：M3 后半段实现");
     if (pageActions.requestRename) openRenamePlaylistDialog();
     if (pageActions.requestDelete) openDeletePlaylistDialog();

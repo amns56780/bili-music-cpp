@@ -90,10 +90,12 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     const ImVec2 linkPos = ImGui::GetItemRectMin();
     draw->AddRectFilled(linkPos, ImVec2(linkPos.x + width - 24.0f, linkPos.y + 32.0f), Colors::Hover, 16.0f);
     const std::string linkIcon = Icons::Utf8(Icons::Link);
-    draw->AddText(GetFonts().body, 18.0f, ImVec2(linkPos.x + 12.0f, linkPos.y + 8.0f), Colors::Text3,
+    // 按墨迹实测上移：图标 +7、文字 +7.5，上下留白一致
+    draw->AddText(GetFonts().body, 18.0f, ImVec2(linkPos.x + 12.0f, linkPos.y + 7.0f), Colors::Text3,
                   linkIcon.c_str());
-    draw->AddText(GetFonts().small, 15.0f, ImVec2(linkPos.x + 12.0f + 16.0f + 8.0f, linkPos.y + 10.0f),
-                  Colors::Text3, "粘贴链接 / BV 号播放");
+    draw->AddText(GetFonts().small, 15.0f,
+                  ImVec2(linkPos.x + 12.0f + 16.0f + 8.0f, linkPos.y + 7.5f), Colors::Text3,
+                  "粘贴链接 / BV 号播放");
     ImGui::PopID();
     if (linkPressed) actions->pasteLink = true;
 
