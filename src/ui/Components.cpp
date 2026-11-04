@@ -127,6 +127,8 @@ float MeasureText(ImFont* font, float size, const std::string& text) {
     return textWidth(font, size, text);
 }
 
+std::string DisplayText(const std::string& text) { return sanitizeForDisplay(text); }
+
 void TextBody(const std::string& text, ImU32 color) {
     ImGui::PushFont(GetFonts().body);
     ImGui::PushStyleColor(ImGuiCol_Text, Vec4(color));

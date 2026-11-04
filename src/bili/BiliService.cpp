@@ -662,4 +662,210 @@ void BiliService::importCookies(const std::map<std::string, std::string>& cookie
     AppLog::info(kTag, "扫码登录 Cookie 已写入，共 " + std::to_string(cookies_.size()) + " 条");
 }
 
+namespace {
+
+std::string joinUrl(const char* base,
+                    const std::map<std::string, std::string>& params) {
+    return std::string(base) + buildQuery(params);
+}
+
+}  // namespace
+
+std::vector<FavFolder> BiliService::favFolders(long long mid, std::string* error) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::vector<FavFolder> folders;
+    std::map<std::string, std::string> params = {{"up_mid", std::to_string(mid)}};
+    const auto signedParams = signParams(params, ensureMixinKey(false));
+    net::HttpResponse response;
+    std::string httpError;
+    if (!net::httpGet(joinUrl("https://api.bilibili.com/x/v3/fav/folder/created/list-all?",
+                             signedParams),
+                      apiHeaders(cookieHeader()), &response, &httpError)) {
+        if (error) *error = httpError;
+        return folders;
+    }
+    try {
+        const nlohmann::json root = nlohmann::json::parse(response.body);
+        const int code = root.value("code", -1);
+        if (code != 0) {
+            if (error) {
+                *error = std::string("收藏夹列表返回 code=") + std::to_string(code) + " " +
+                         root.value("message", std::string());
+            }
+            return folders;
+        }
+        const nlohmann::json data = root.value("data", nlohmann::json::object());
+        for (const auto& item : data.value("list", nlohmann::json::array())) {
+            FavFolder folder;
+            folder.id = item.value("id", (int64_t)0);
+            folder.title = item.value("title", std::string());
+            folder.mediaCount = item.value("media_count", 0);
+            if (folder.id != 0 && !folder.title.empty()) folders.push_back(std::move(folder));
+        }
+    } catch (const std::exception& exception) {
+        if (error) *error = std::string("收藏夹列表解析失败：") + exception.what();
+    }
+    AppLog::info(kTag, "收藏夹列表：" + std::to_string(folders.size()) + " 个");
+    return folders;
+}
+
+ImportedSongsResult BiliService::importFavFolder(long long mediaId,
+                                                const ImportProgressFn& progress) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    ImportedSongsResult result;
+    constexpr int kPageSize = 20;
+    constexpr int kMaxPages = 50;
+    std::string folderTitle;
+    int page = 1;
+    bool hasMore = true;
+    while (hasMore && page <= kMaxPages) {
+        std::map<std::string, std::string> params = {
+            {"media_id", std::to_string(mediaId)},
+            {"pn", std::to_string(page)},
+            {"ps", std::to_string(kPageSize)},
+            {"platform", "web"},
+        };
+        net::HttpResponse response;
+        std::string httpError;
+        if (!net::httpGet(joinUrl("https://api.bilibili.com/x/v3/fav/resource/list?",
+                                 signParams(params, ensureMixinKey(false))),
+                          apiHeaders(cookieHeader()), &response, &httpError)) {
+            result.message = httpError;
+            return result;
+        }
+        try {
+            const nlohmann::json root = nlohmann::json::parse(response.body);
+            const int code = root.value("code", -1);
+            if (code != 0) {
+                result.message = std::string("收藏夹内容返回 code=") + std::to_string(code) + " " +
+                                 root.value("message", std::string());
+                return result;
+            }
+            const nlohmann::json data = root.value("data", nlohmann::json::object());
+            const nlohmann::json info = data.value("info", nlohmann::json::object());
+            if (folderTitle.empty()) folderTitle = info.value("title", std::string());
+            result.total = info.value("media_count", result.total);
+            for (const auto& media : data.value("medias", nlohmann::json::array())) {
+                ImportedSong song;
+                song.bvid = media.value("bvid", std::string());
+                if (song.bvid.empty()) continue;
+                song.title = media.value("title", std::string());
+                song.coverUrl = media.value("cover", std::string());
+                song.durationMs = (int64_t)media.value("duration", 0) * 1000;
+                const nlohmann::json upper = media.value("upper", nlohmann::json::object());
+                song.artist = upper.value("name", std::string());
+                result.songs.push_back(std::move(song));
+            }
+            hasMore = data.value("has_more", false);
+            if (progress) {
+                progress("正在导入「" + folderTitle + "」：已读取 " +
+                             std::to_string(result.songs.size()) + " 首",
+                         (int)result.songs.size(),
+                         result.total > 0 ? result.total : (int)result.songs.size());
+            }
+            ++page;
+        } catch (const std::exception& exception) {
+            result.message = std::string("收藏夹内容解析失败：") + exception.what();
+            return result;
+        }
+    }
+    resolveCids(&result.songs, progress);
+    result.ok = true;
+    result.message = "取到 " + std::to_string(result.songs.size()) + " 首";
+    return result;
+}
+
+ImportedSongsResult BiliService::importToView(const ImportProgressFn& progress) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    ImportedSongsResult result;
+    std::map<std::string, std::string> params = {
+        {"access_key", ""}, {"pn", "1"}, {"ps", "50"}};
+    net::HttpResponse response;
+    std::string httpError;
+    if (!net::httpGet(joinUrl("https://api.bilibili.com/x/v2/history/toview?",
+                             signParams(params, ensureMixinKey(false))),
+                      apiHeaders(cookieHeader()), &response, &httpError)) {
+        result.message = httpError;
+        return result;
+    }
+    try {
+        const nlohmann::json root = nlohmann::json::parse(response.body);
+        const int code = root.value("code", -1);
+        if (code != 0) {
+            result.message = std::string("稍后再看返回 code=") + std::to_string(code) + " " +
+                             root.value("message", std::string());
+            return result;
+        }
+        const nlohmann::json data = root.value("data", nlohmann::json::object());
+        for (const auto& item : data.value("list", nlohmann::json::array())) {
+            ImportedSong song;
+            song.bvid = item.value("bvid", std::string());
+            song.cid = item.value("cid", (int64_t)0);
+            if (song.bvid.empty() || song.cid <= 0) continue;
+            song.title = item.value("title", std::string());
+            song.coverUrl = item.value("pic", std::string());
+            song.durationMs = (int64_t)item.value("duration", 0) * 1000;
+            const nlohmann::json owner = item.value("owner", nlohmann::json::object());
+            song.artist = owner.value("name", std::string());
+            result.songs.push_back(std::move(song));
+        }
+        if (progress) {
+            progress("正在导入「稍后再看」：已读取 " + std::to_string(result.songs.size()) + " 首",
+                     (int)result.songs.size(), (int)result.songs.size());
+        }
+    } catch (const std::exception& exception) {
+        result.message = std::string("稍后再看解析失败：") + exception.what();
+        return result;
+    }
+    result.total = (int)result.songs.size();
+    result.ok = true;
+    result.message = "取到 " + std::to_string(result.songs.size()) + " 首";
+    return result;
+}
+
+void BiliService::resolveCids(std::vector<ImportedSong>* songs, const ImportProgressFn& progress) {
+    std::vector<ImportedSong> resolved;
+    resolved.reserve(songs->size());
+    int index = 0;
+    for (ImportedSong& song : *songs) {
+        if (song.cid > 0) {
+            resolved.push_back(std::move(song));
+            continue;
+        }
+        ++index;
+        if (progress) {
+            progress("正在补齐音频信息：" + std::to_string(index) + "/" + std::to_string(songs->size()),
+                     index, (int)songs->size());
+        }
+        std::map<std::string, std::string> params = {{"bvid", song.bvid}};
+        net::HttpResponse response;
+        std::string httpError;
+        if (!net::httpGet(joinUrl("https://api.bilibili.com/x/web-interface/view?",
+                                 signParams(params, ensureMixinKey(false))),
+                          apiHeaders(cookieHeader()), &response, &httpError)) {
+            continue;
+        }
+        try {
+            const nlohmann::json root = nlohmann::json::parse(response.body);
+            if (root.value("code", -1) != 0) continue;
+            const nlohmann::json data = root.value("data", nlohmann::json::object());
+            song.cid = data.value("cid", (int64_t)0);
+            if (song.cid <= 0) continue;
+            if (song.title.empty()) song.title = data.value("title", std::string());
+            if (song.artist.empty()) {
+                const nlohmann::json owner = data.value("owner", nlohmann::json::object());
+                song.artist = owner.value("name", std::string());
+            }
+            if (song.coverUrl.empty()) song.coverUrl = data.value("pic", std::string());
+            if (song.durationMs <= 0) {
+                song.durationMs = (int64_t)data.value("duration", 0) * 1000;
+            }
+            resolved.push_back(std::move(song));
+        } catch (const std::exception&) {
+            continue;
+        }
+    }
+    *songs = std::move(resolved);
+}
+
 }  // namespace bili

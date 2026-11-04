@@ -13,6 +13,8 @@ struct PlaylistPageActions {
     bool playAll = false;
     bool selectMode = false;
     bool openMenu = false;
+    bool requestRename = false;
+    bool requestDelete = false;
     long long playSongId = -1;
     bool showMenuAboutEdit = false;
 };

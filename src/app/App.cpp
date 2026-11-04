@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <thread>
 
@@ -449,6 +450,22 @@ void App::pollAsync() {
         events.swap(asyncEvents_);
     }
     for (const AsyncEvent& event : events) {
+        if (event.kind == AsyncEvent::Kind::ImportProgress) {
+            importProgressText_ = event.progressText;
+            setStatus(event.progressText);
+            continue;
+        }
+        if (event.kind == AsyncEvent::Kind::ImportDone) {
+            finishImport(event);
+            continue;
+        }
+        if (event.kind == AsyncEvent::Kind::FavFolders) {
+            favFoldersLoading_ = false;
+            favFolders_ = event.favFolders;
+            favFolderDialogRequested_ = true;
+            if (!event.ok && !event.message.empty()) setStatus(event.message, true);
+            continue;
+        }
         if (event.kind == AsyncEvent::Kind::Login) {
             accountLoggedIn_ = event.loggedIn;
             accountName_ = event.userName;
@@ -536,6 +553,406 @@ void App::pollAsync() {
         if (event.downgraded) message += "（请求的档位不可用，已自动降级）";
         setStatus(message);
         AppLog::info("App", message + " bvid=" + event.bvid);
+    }
+}
+
+
+// ================= M3：歌单管理与导入 =================
+
+void App::openCreatePlaylistDialog() {
+    nameDialogIsRename_ = false;
+    nameDialogPlaylistId_ = -1;
+    nameInput_[0] = '\0';
+    nameDialogError_.clear();
+    nameDialogRequested_ = true;
+}
+
+void App::openRenamePlaylistDialog() {
+    const StoredPlaylist* playlist = currentPlaylist();
+    if (playlist == nullptr) return;
+    nameDialogIsRename_ = true;
+    nameDialogPlaylistId_ = playlist->id;
+    std::snprintf(nameInput_, sizeof(nameInput_), "%s", playlist->title.c_str());
+    nameDialogError_.clear();
+    nameDialogRequested_ = true;
+}
+
+void App::openDeletePlaylistDialog() {
+    if (currentPlaylist() == nullptr) return;
+    deletePlaylistId_ = selectedPlaylistId_;
+    deleteDialogRequested_ = true;
+}
+
+void App::handleNameDialogConfirm() {
+    const std::string normalized = LibraryStore::normalizeTitle(nameInput_);
+    if (normalized.empty()) {
+        nameDialogError_ = "歌单名不能为空";
+        return;
+    }
+    nameDialogError_.clear();
+    if (nameDialogIsRename_) {
+        const int64_t id = nameDialogPlaylistId_;
+        const StoredPlaylist* playlist = nullptr;
+        for (const StoredPlaylist& item : store_.playlists()) {
+            if (item.id == id) playlist = &item;
+        }
+        if (playlist == nullptr) {
+            nameDialogRequested_ = false;
+            return;
+        }
+        if (LibraryStore::normalizeTitle(playlist->title) == normalized) {
+            nameDialogRequested_ = false;
+            return;
+        }
+        PlaylistNameConflict conflict;
+        if (store_.findConflict(normalized, id, &conflict)) {
+            conflict_ = conflict;
+            conflictAction_ = ConflictAction::Rename;
+            conflictPlaylistId_ = id;
+            nameDialogRequested_ = false;
+            conflictDialogRequested_ = true;
+            return;
+        }
+        if (store_.renamePlaylist(id, normalized)) {
+            setStatus("已重命名歌单：" + normalized);
+        } else {
+            setStatus("重命名失败", true);
+        }
+        nameDialogRequested_ = false;
+        return;
+    }
+
+    PlaylistNameConflict conflict;
+    if (store_.findConflict(normalized, -1, &conflict)) {
+        conflict_ = conflict;
+        conflictAction_ = ConflictAction::Create;
+        nameDialogRequested_ = false;
+        conflictDialogRequested_ = true;
+        return;
+    }
+    const int64_t id = store_.createPlaylist(normalized);
+    selectPlaylist(id);
+    setStatus("已新建歌单：" + normalized);
+    nameDialogRequested_ = false;
+}
+
+void App::handleConflictChoice(int choice) {
+    conflictDialogRequested_ = false;
+    const ConflictAction action = conflictAction_;
+    conflictAction_ = ConflictAction::None;
+    if (choice == 2) {
+        pendingImportValid_ = false;
+        setStatus("已取消");
+        return;
+    }
+    const std::string desired =
+        choice == 0 ? conflict_.desiredTitle : conflict_.suggestedTitle;
+
+    if (action == ConflictAction::Create) {
+        const int64_t id = choice == 0 ? store_.createPlaylistOverwriting(desired)
+                                       : store_.createPlaylist(desired);
+        selectPlaylist(id);
+        setStatus("已新建歌单：" + desired);
+        return;
+    }
+    if (action == ConflictAction::Rename) {
+        const int64_t id = conflictPlaylistId_;
+        if (choice == 0) store_.deletePlaylistByTitle(desired, id);
+        if (store_.renamePlaylist(id, desired)) {
+            setStatus("已重命名歌单：" + desired);
+        } else {
+            setStatus("重命名失败", true);
+        }
+        return;
+    }
+
+    // 导入场景
+    if (!pendingImportValid_) return;
+    ImportContext context = pendingImport_;
+    context.overwrite = choice == 0;
+    if (choice == 1) context.title = conflict_.suggestedTitle;
+    startImportWorker(context);
+}
+
+void App::beginImport(const ImportContext& context) {
+    // 同一来源已经导入过 → 直接复用那个歌单，不再弹重名
+    if (store_.findBySource(context.sourceType, context.sourceTitle) != nullptr) {
+        startImportWorker(context);
+        return;
+    }
+    PlaylistNameConflict conflict;
+    if (store_.findConflict(context.title, -1, &conflict)) {
+        conflict_ = conflict;
+        conflictAction_ = context.toView ? ConflictAction::ImportToView : ConflictAction::ImportFav;
+        conflictPlaylistId_ = -1;
+        pendingImport_ = context;
+        pendingImportValid_ = true;
+        conflictDialogRequested_ = true;
+        return;
+    }
+    startImportWorker(context);
+}
+
+void App::startImportWorker(const ImportContext& context) {
+    importRunning_ = true;
+    pendingImportValid_ = false;
+    importProgressText_ = "正在导入「" + context.title + "」…";
+    setStatus(importProgressText_);
+    AppLog::info("App", "开始导入：" + context.title + " source=" + context.sourceType);
+
+    const bili::ImportProgressFn progress = [this](const std::string& text, int current, int total) {
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::ImportProgress;
+        event.ok = true;
+        event.progressText = text;
+        event.progressCurrent = current;
+        event.progressTotal = total;
+        postAsync(std::move(event));
+    };
+
+    std::thread([this, context, progress]() {
+        bili::ImportedSongsResult result =
+            context.toView ? bili_.importToView(progress)
+                           : bili_.importFavFolder(context.folderId, progress);
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::ImportDone;
+        event.ok = result.ok;
+        event.imported = std::move(result);
+        event.message = event.imported.message;
+        event.desiredTitle = context.title;
+        event.overwrite = context.overwrite;
+        event.sourceType = context.sourceType;
+        event.sourceTitle = context.sourceTitle;
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::loadFavFolders() {
+    if (!accountLoggedIn_) {
+        setStatus("请先登录再导入收藏夹", true);
+        importSourceDialogRequested_ = false;
+        return;
+    }
+    favFoldersLoading_ = true;
+    favFolders_.clear();
+    favFolderDialogRequested_ = true;
+    const long long mid = accountId_;
+    std::thread([this, mid]() {
+        std::string error;
+        std::vector<bili::FavFolder> folders = bili_.favFolders(mid, &error);
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::FavFolders;
+        event.ok = error.empty();
+        event.message = error;
+        event.favFolders = std::move(folders);
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::finishImport(const AsyncEvent& event) {
+    importRunning_ = false;
+    if (!event.ok) {
+        setStatus("导入失败：" + event.message, true);
+        importProgressText_.clear();
+        return;
+    }
+    int64_t playlistId = -1;
+    if (event.overwrite) {
+        playlistId =
+            store_.createPlaylistOverwriting(event.desiredTitle, event.sourceType, event.sourceTitle);
+    } else if (const StoredPlaylist* existing =
+                   store_.findBySource(event.sourceType, event.sourceTitle)) {
+        playlistId = existing->id;
+    } else {
+        playlistId = store_.createPlaylist(event.desiredTitle, event.sourceType, event.sourceTitle);
+    }
+    std::vector<StoredSong> songs;
+    songs.reserve(event.imported.songs.size());
+    for (const bili::ImportedSong& imported : event.imported.songs) {
+        StoredSong song;
+        song.bvid = imported.bvid;
+        song.cid = imported.cid;
+        song.title = imported.title;
+        song.artist = imported.artist;
+        song.coverUrl = imported.coverUrl;
+        song.durationMs = imported.durationMs;
+        songs.push_back(std::move(song));
+    }
+    const int added = store_.addSongs(playlistId, songs);
+    selectPlaylist(playlistId);
+    setStatus("「" + event.desiredTitle + "」导入完成：新增 " + std::to_string(added) + " 首");
+    importProgressText_.clear();
+    AppLog::info("App", "导入完成 " + event.desiredTitle + " 新增 " + std::to_string(added));
+}
+
+void App::drawM3Dialogs() {
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const ImVec2 center(display.x * 0.5f, display.y * 0.5f);
+
+    // ---- 新建 / 重命名歌单 ----
+    if (nameDialogRequested_) ImGui::OpenPopup("歌单名称");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("歌单名称", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!nameDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextUnformatted(nameDialogIsRename_ ? "重命名歌单" : "新建歌单");
+        ImGui::SetNextItemWidth(360.0f);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        if (ImGui::InputText("##name", nameInput_, sizeof(nameInput_),
+                             ImGuiInputTextFlags_EnterReturnsTrue)) {
+            handleNameDialogConfirm();
+        }
+        if (!nameDialogError_.empty()) {
+            ImGui::TextColored(ImVec4(0.93f, 0.25f, 0.25f, 1.0f), "%s", nameDialogError_.c_str());
+        }
+        if (ImGui::Button("确定", ImVec2(110.0f, 32.0f))) handleNameDialogConfirm();
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            nameDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- 重名冲突 ----
+    if (conflictDialogRequested_) ImGui::OpenPopup("歌单重名");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("歌单重名", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!conflictDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextWrapped("已存在同名歌单「%s」（%d 首）。", conflict_.existingTitle.c_str(),
+                           conflict_.existingSongCount);
+        ImGui::TextDisabled("覆盖会删除已有的同名歌单及其所有曲目。");
+        ImGui::Spacing();
+        if (ImGui::Button("覆盖", ImVec2(110.0f, 32.0f))) handleConflictChoice(0);
+        ImGui::SameLine();
+        const std::string renameLabel = "自动重命名「" + conflict_.suggestedTitle + "」";
+        if (ImGui::Button(renameLabel.c_str(), ImVec2(0.0f, 32.0f))) handleConflictChoice(1);
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(100.0f, 32.0f))) {
+            handleConflictChoice(2);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- 删除确认 ----
+    if (deleteDialogRequested_) ImGui::OpenPopup("删除歌单");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("删除歌单", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!deleteDialogRequested_) ImGui::CloseCurrentPopup();
+        std::string title;
+        int count = 0;
+        for (const StoredPlaylist& playlist : store_.playlists()) {
+            if (playlist.id == deletePlaylistId_) {
+                title = playlist.title;
+                count = store_.songCount(playlist.id);
+            }
+        }
+        ImGui::TextWrapped("删除歌单「%s」及其中 %d 首曲目？此操作不可恢复。", title.c_str(), count);
+        ImGui::Spacing();
+        if (ImGui::Button("删除", ImVec2(110.0f, 32.0f))) {
+            if (store_.deletePlaylist(deletePlaylistId_)) {
+                if (selectedPlaylistId_ == deletePlaylistId_) {
+                    selectedPlaylistId_ =
+                        store_.playlists().empty() ? -1 : store_.playlists().front().id;
+                }
+                setStatus("已删除歌单");
+            }
+            deleteDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            deleteDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- 导入来源 ----
+    if (importSourceDialogRequested_) ImGui::OpenPopup("导入歌单");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("导入歌单", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!importSourceDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextUnformatted("选择要导入的来源：");
+        ImGui::Spacing();
+        if (ImGui::Button("收藏夹", ImVec2(150.0f, 36.0f))) {
+            importSourceDialogRequested_ = false;
+            loadFavFolders();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("稍后再看", ImVec2(150.0f, 36.0f))) {
+            importSourceDialogRequested_ = false;
+            ImportContext context;
+            context.title = "稍后再看";
+            context.sourceType = "TOVIEW";
+            context.sourceTitle = "稍后再看";
+            context.toView = true;
+            beginImport(context);
+        }
+        ImGui::Spacing();
+        ImGui::BeginDisabled(true);
+        ImGui::Button("UP主投稿（M3 后半段）", ImVec2(150.0f, 36.0f));
+        ImGui::SameLine();
+        ImGui::Button("合集（M3 后半段）", ImVec2(150.0f, 36.0f));
+        ImGui::EndDisabled();
+        ImGui::Spacing();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            importSourceDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- 收藏夹选择 ----
+    if (favFolderDialogRequested_) ImGui::OpenPopup("选择收藏夹");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("选择收藏夹", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!favFolderDialogRequested_) ImGui::CloseCurrentPopup();
+        if (favFoldersLoading_) {
+            ImGui::TextUnformatted("正在获取收藏夹列表…");
+        } else if (favFolders_.empty()) {
+            ImGui::TextDisabled("没有拿到收藏夹（确认已登录且账号里有收藏夹）");
+        } else {
+            ImGui::TextUnformatted("选择一个收藏夹导入：");
+            ImGui::BeginChild("##fav_list", ImVec2(420.0f, 260.0f), ImGuiChildFlags_Borders);
+            for (const bili::FavFolder& folder : favFolders_) {
+                const std::string label =
+                    Ui::DisplayText(folder.title) + "  (" + std::to_string(folder.mediaCount) + " 首)";
+                if (ImGui::Selectable(label.c_str())) {
+                    favFolderDialogRequested_ = false;
+                    ImportContext context;
+                    context.title = folder.title;
+                    context.sourceType = "FAV";
+                    context.sourceTitle = folder.title;
+                    context.folderId = folder.id;
+                    ImGui::CloseCurrentPopup();
+                    beginImport(context);
+                }
+            }
+            ImGui::EndChild();
+        }
+        ImGui::Spacing();
+        if (importRunning_) ImGui::TextDisabled("%s", importProgressText_.c_str());
+        if (ImGui::Button("刷新", ImVec2(110.0f, 32.0f))) {
+            favFoldersLoading_ = true;
+            favFolders_.clear();
+            std::thread([this]() {
+                std::string error;
+                std::vector<bili::FavFolder> folders = bili_.favFolders(accountId_, &error);
+                AsyncEvent event;
+                event.kind = AsyncEvent::Kind::FavFolders;
+                event.ok = error.empty();
+                event.message = error;
+                event.favFolders = std::move(folders);
+                postAsync(std::move(event));
+            }).detach();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            favFolderDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 }
 
@@ -686,6 +1103,8 @@ void App::drawDialogs() {
     if (!ImGui::IsPopupOpen("登录 B 站") && qrState_ != QrState::Idle) {
         cancelQrLogin();
     }
+    drawM3Dialogs();
+
     ImGui::PopStyleVar(8);
     ImGui::PopStyleColor(11);
 }
@@ -762,7 +1181,7 @@ void App::draw() {
 
     // ================= 动作分发 =================
     if (sidebarActions.selectPlaylist) selectPlaylist(sidebarActions.playlistId);
-    if (sidebarActions.createPlaylist) setStatus("新建歌单：M3 实现（当前数据由 Java 版维护）");
+    if (sidebarActions.createPlaylist) openCreatePlaylistDialog();
     if (sidebarActions.pasteLink) linkDialogRequested_ = true;
     if (sidebarActions.login) loginDialogRequested_ = true;
     if (sidebarActions.logout) {
@@ -781,15 +1200,14 @@ void App::draw() {
             }
         }
     }
-    if (sidebarActions.toggleImportMenu) {
-        importMenuOpen_ = !importMenuOpen_;
-        setStatus(importMenuOpen_ ? "导入歌单：M3 实现（收藏夹/稍后再看/UP主投稿/合集）" : "就绪");
-    }
+    if (sidebarActions.toggleImportMenu) importSourceDialogRequested_ = true;
 
     if (pageActions.playAll) playFirstPlayable();
     if (pageActions.playSongId >= 0) playSongById(pageActions.playSongId);
-    if (pageActions.selectMode) setStatus("多选 / 复制 / 移动：M3 实现");
-    if (pageActions.openMenu) setStatus("歌单菜单（重命名 / 封面 / 分享 / 删除）：M3 实现");
+    if (pageActions.selectMode) setStatus("多选 / 复制 / 移动：M3 后半段实现");
+    if (pageActions.requestRename) openRenamePlaylistDialog();
+    if (pageActions.requestDelete) openDeletePlaylistDialog();
+    if (pageActions.openMenu) setStatus("封面 / 分享：M3 后半段实现");
 
     if (playBarActions.togglePlay) {
         if (hasMedia_) {

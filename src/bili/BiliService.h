@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -42,6 +43,30 @@ struct QrPollInfo {
     std::string message;
 };
 
+struct FavFolder {
+    int64_t id = 0;
+    std::string title;
+    int mediaCount = 0;
+};
+
+struct ImportedSong {
+    std::string bvid;
+    std::string title;
+    std::string artist;
+    std::string coverUrl;
+    int64_t cid = 0;
+    int64_t durationMs = 0;
+};
+
+struct ImportedSongsResult {
+    bool ok = false;
+    std::vector<ImportedSong> songs;
+    std::string message;
+    int total = 0;
+};
+
+using ImportProgressFn = std::function<void(const std::string& text, int current, int total)>;
+
 struct AudioStreamInfo {
     bool ok = false;
     std::string url;
@@ -79,6 +104,13 @@ public:
     QrCodeInfo qrGenerate();
     QrPollInfo qrPoll(const std::string& qrcodeKey);
     void importCookies(const std::map<std::string, std::string>& cookies);
+
+    // ---------------- 歌单导入（M3） ----------------
+    std::vector<FavFolder> favFolders(long long mid, std::string* error);
+    ImportedSongsResult importFavFolder(long long mediaId, const ImportProgressFn& progress);
+    ImportedSongsResult importToView(const ImportProgressFn& progress);
+    // 收藏夹/投稿列表不带 cid，逐条用 view 接口补齐（合集/toview 自带 cid 则跳过）
+    void resolveCids(std::vector<ImportedSong>* songs, const ImportProgressFn& progress);
 
     // settings.json 里的其它键（与 Java 版共用），例如 audio_quality
     std::string getSetting(const std::string& key) const;

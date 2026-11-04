@@ -24,7 +24,7 @@ public:
 
 private:
     struct AsyncEvent {
-        enum class Kind { Login, Play, BvPlay, QrGenerate, QrPoll };
+        enum class Kind { Login, Play, BvPlay, QrGenerate, QrPoll, FavFolders, ImportProgress, ImportDone };
         Kind kind = Kind::Login;
         bool ok = false;
         long long songId = -1;
@@ -46,6 +46,27 @@ private:
         std::string userName;
         long long userId = 0;
         bool loggedIn = false;
+        // M3 歌单导入
+        std::vector<bili::FavFolder> favFolders;
+        bili::ImportedSongsResult imported;
+        std::string progressText;
+        int progressCurrent = 0;
+        int progressTotal = 0;
+        bool overwrite = false;
+        std::string sourceType;
+        std::string sourceTitle;
+        std::string desiredTitle;
+    };
+
+    // 重名对话框后续动作
+    enum class ConflictAction { None, Create, Rename, ImportFav, ImportToView };
+    struct ImportContext {
+        std::string title;
+        std::string sourceType;
+        std::string sourceTitle;
+        long long folderId = 0;
+        bool toView = false;
+        bool overwrite = false;
     };
 
     void syncPlaybackState();
@@ -68,6 +89,18 @@ private:
     void drawDialogs();
     void checkPlaybackStall();
     void applyQualitySelection(int qualityId);
+
+    // M3：歌单管理 / 导入
+    void openCreatePlaylistDialog();
+    void openRenamePlaylistDialog();
+    void openDeletePlaylistDialog();
+    void handleNameDialogConfirm();
+    void handleConflictChoice(int choice);  // 0=覆盖 1=自动重命名 2=取消
+    void beginImport(const ImportContext& context);
+    void startImportWorker(const ImportContext& context);
+    void loadFavFolders();
+    void drawM3Dialogs();
+    void finishImport(const AsyncEvent& event);
 
     // 扫码登录
     enum class QrState { Idle, Loading, Waiting, Scanned, Expired, Success };
@@ -133,4 +166,29 @@ private:
     util::QrMatrix qrMatrix_;
     std::shared_ptr<std::atomic<bool>> qrCancel_;
     bool qrCloseRequested_ = false;
+
+    // ---------------- M3 歌单管理 / 导入 ----------------
+    bool nameDialogRequested_ = false;
+    bool nameDialogIsRename_ = false;
+    long long nameDialogPlaylistId_ = -1;
+    char nameInput_[256] = {};
+    std::string nameDialogError_;
+
+    bool conflictDialogRequested_ = false;
+    PlaylistNameConflict conflict_;
+    ConflictAction conflictAction_ = ConflictAction::None;
+    long long conflictPlaylistId_ = -1;
+
+    bool deleteDialogRequested_ = false;
+    long long deletePlaylistId_ = -1;
+
+    bool importSourceDialogRequested_ = false;
+    bool favFolderDialogRequested_ = false;
+    bool favFoldersLoading_ = false;
+    std::vector<bili::FavFolder> favFolders_;
+    bool importRunning_ = false;
+    std::string importProgressText_;
+
+    ImportContext pendingImport_;
+    bool pendingImportValid_ = false;
 };

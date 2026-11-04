@@ -95,12 +95,12 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         ImGui::OpenPopup("page_menu");
     }
     if (ImGui::BeginPopup("page_menu")) {
-        if (ImGui::Selectable("重命名歌单")) actions->openMenu = true;
+        if (ImGui::Selectable("重命名歌单")) actions->requestRename = true;
         if (ImGui::Selectable("从歌单视频选封面")) actions->openMenu = true;
         if (ImGui::Selectable("从本地图片选封面")) actions->openMenu = true;
         if (ImGui::Selectable("分享歌单")) actions->openMenu = true;
         ImGui::Separator();
-        if (ImGui::Selectable("删除歌单")) actions->openMenu = true;
+        if (ImGui::Selectable("删除歌单")) actions->requestDelete = true;
         ImGui::EndPopup();
     }
     // ---------------- 曲目表 ----------------
