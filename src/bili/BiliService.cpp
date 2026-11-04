@@ -540,4 +540,126 @@ AudioStreamInfo BiliService::resolveAudio(const std::string& bvid, long long cid
     return info;
 }
 
+namespace {
+
+// 登录成功时 data.url 里也带着 Cookie（crossDomain URL），Set-Cookie 拿不到时兜底用
+void appendCookiesFromUrl(const std::string& url, std::map<std::string, std::string>* cookies) {
+    const size_t question = url.find('?');
+    if (question == std::string::npos) return;
+    std::string query = url.substr(question + 1);
+    size_t start = 0;
+    while (start < query.size()) {
+        size_t end = query.find('&', start);
+        if (end == std::string::npos) end = query.size();
+        const std::string pair = query.substr(start, end - start);
+        const size_t equals = pair.find('=');
+        if (equals != std::string::npos) {
+            const std::string name = pair.substr(0, equals);
+            std::string value = pair.substr(equals + 1);
+            // URL 里是百分号编码的，这里还原成原始 Cookie 值
+            std::string decoded;
+            decoded.reserve(value.size());
+            for (size_t i = 0; i < value.size(); ++i) {
+                if (value[i] == '%' && i + 2 < value.size()) {
+                    auto hexValue = [](char c) -> int {
+                        if (c >= '0' && c <= '9') return c - '0';
+                        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                        return -1;
+                    };
+                    const int high = hexValue(value[i + 1]);
+                    const int low = hexValue(value[i + 2]);
+                    if (high >= 0 && low >= 0) {
+                        decoded.push_back((char)((high << 4) | low));
+                        i += 2;
+                        continue;
+                    }
+                }
+                decoded.push_back(value[i]);
+            }
+            if (!name.empty() && !decoded.empty()) (*cookies)[name] = decoded;
+        }
+        start = end + 1;
+    }
+}
+
+}  // namespace
+
+QrCodeInfo BiliService::qrGenerate() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    QrCodeInfo info;
+    net::HttpResponse response;
+    std::string error;
+    if (!net::httpGet("https://passport.bilibili.com/x/passport-login/web/qrcode/generate",
+                      apiHeaders(std::string()), &response, &error)) {
+        info.message = error;
+        return info;
+    }
+    try {
+        const nlohmann::json root = nlohmann::json::parse(response.body);
+        const int code = root.value("code", -1);
+        if (code != 0) {
+            info.message = std::string("二维码接口返回 code=") + std::to_string(code) + " " +
+                           root.value("message", std::string());
+            return info;
+        }
+        const nlohmann::json data = root.value("data", nlohmann::json::object());
+        info.url = data.value("url", std::string());
+        info.key = data.value("qrcode_key", std::string());
+        info.ok = !info.url.empty() && !info.key.empty();
+        if (!info.ok) info.message = "二维码接口没有返回 url / qrcode_key";
+    } catch (const std::exception& exception) {
+        info.message = std::string("二维码解析失败：") + exception.what();
+    }
+    return info;
+}
+
+QrPollInfo BiliService::qrPoll(const std::string& qrcodeKey) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    QrPollInfo info;
+    const std::string url =
+        "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=" +
+        net::urlEncode(qrcodeKey);
+    net::HttpResponse response;
+    std::string error;
+    if (!net::httpGet(url, apiHeaders(std::string()), &response, &error)) {
+        info.message = error;
+        return info;
+    }
+    try {
+        const nlohmann::json root = nlohmann::json::parse(response.body);
+        const int rootCode = root.value("code", -1);
+        const nlohmann::json data = root.value("data", nlohmann::json::object());
+        const int code = data.value("code", -1);
+        info.ok = rootCode == 0;
+        if (!info.ok) {
+            info.message = std::string("扫码轮询失败 code=") + std::to_string(rootCode) + " " +
+                           root.value("message", std::string());
+            return info;
+        }
+        info.message = data.value("message", std::string());
+        if (code == 0) {
+            info.success = true;
+            for (const auto& [name, value] : response.setCookies) info.cookies[name] = value;
+            appendCookiesFromUrl(data.value("url", std::string()), &info.cookies);
+        } else if (code == 86090) {
+            info.scanned = true;
+        } else if (code == 86038) {
+            info.expired = true;
+        }
+    } catch (const std::exception& exception) {
+        info.message = std::string("扫码轮询解析失败：") + exception.what();
+    }
+    return info;
+}
+
+void BiliService::importCookies(const std::map<std::string, std::string>& cookies) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    for (const auto& [name, value] : cookies) {
+        if (!name.empty() && !value.empty()) cookies_[name] = value;
+    }
+    saveSettings();
+    AppLog::info(kTag, "扫码登录 Cookie 已写入，共 " + std::to_string(cookies_.size()) + " 条");
+}
+
 }  // namespace bili

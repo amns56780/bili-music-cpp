@@ -46,8 +46,10 @@ set(APP_SOURCES
     src/data/LibraryStore.cpp
     src/util/AppLog.cpp
     src/util/Md5.cpp
+    src/util/QrCode.cpp
     src/net/HttpClient.cpp
     src/bili/BiliService.cpp
+    third_party/qrcodegen/qrcodegen.cpp
     src/ui/Theme.cpp
     src/ui/Components.cpp
     src/ui/TitleBar.cpp
@@ -63,7 +65,7 @@ else()
     add_executable(bilimusic WIN32 ${APP_SOURCES})
 endif()
 
-target_include_directories(bilimusic PRIVATE src third_party)
+target_include_directories(bilimusic PRIVATE src third_party third_party/qrcodegen)
 target_link_libraries(bilimusic PRIVATE imgui)
 
 if (MINGW)

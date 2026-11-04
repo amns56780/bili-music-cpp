@@ -1,6 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -8,6 +11,7 @@
 #include "bili/BiliService.h"
 #include "data/LibraryStore.h"
 #include "media/VlcEngine.h"
+#include "util/QrCode.h"
 
 struct GLFWwindow;
 
@@ -20,7 +24,7 @@ public:
 
 private:
     struct AsyncEvent {
-        enum class Kind { Login, Play, BvPlay };
+        enum class Kind { Login, Play, BvPlay, QrGenerate, QrPoll };
         Kind kind = Kind::Login;
         bool ok = false;
         long long songId = -1;
@@ -34,6 +38,11 @@ private:
         bool downgraded = false;
         std::vector<std::string> backupUrls;
         int64_t deadlineEpochSeconds = 0;
+        // 扫码登录
+        std::string qrUrl;
+        std::string qrKey;
+        int qrStatus = 0;  // 1=已扫码待确认 2=过期 3=成功 0=出错/未知
+        std::map<std::string, std::string> qrCookies;
         std::string userName;
         long long userId = 0;
         bool loggedIn = false;
@@ -59,6 +68,12 @@ private:
     void drawDialogs();
     void checkPlaybackStall();
     void applyQualitySelection(int qualityId);
+
+    // 扫码登录
+    enum class QrState { Idle, Loading, Waiting, Scanned, Expired, Success };
+    void startQrLogin();
+    void startQrPolling(const std::string& qrKey);
+    void cancelQrLogin();
 
     GLFWwindow* window_ = nullptr;
     LibraryStore store_;
@@ -109,4 +124,13 @@ private:
     bool loginDialogRequested_ = false;
     char linkInput_[512] = {};
     char cookieInput_[8192] = {};
+
+    // 扫码登录状态
+    QrState qrState_ = QrState::Idle;
+    bool loginTabQr_ = true;
+    std::string qrKey_;
+    std::string qrMessage_;
+    util::QrMatrix qrMatrix_;
+    std::shared_ptr<std::atomic<bool>> qrCancel_;
+    bool qrCloseRequested_ = false;
 };

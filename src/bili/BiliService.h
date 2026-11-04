@@ -26,6 +26,22 @@ struct VideoInfo {
     std::string message;
 };
 
+struct QrCodeInfo {
+    bool ok = false;
+    std::string url;   // 二维码内容（B 站 App 扫这个）
+    std::string key;   // qrcode_key，轮询时用
+    std::string message;
+};
+
+struct QrPollInfo {
+    bool ok = false;       // 请求/解析是否成功
+    bool success = false;  // 0：登录成功
+    bool scanned = false;  // 86090：已扫码，等待手机确认
+    bool expired = false;  // 86038：二维码已过期
+    std::map<std::string, std::string> cookies;  // 成功时的登录态 Cookie
+    std::string message;
+};
+
 struct AudioStreamInfo {
     bool ok = false;
     std::string url;
@@ -58,6 +74,11 @@ public:
     NavInfo fetchNav();
     VideoInfo fetchVideo(const std::string& bvid);
     AudioStreamInfo resolveAudio(const std::string& bvid, long long cid, int qualityId);
+
+    // 扫码登录：generate 拿二维码内容 + key，poll 轮询状态；成功时带上登录 Cookie
+    QrCodeInfo qrGenerate();
+    QrPollInfo qrPoll(const std::string& qrcodeKey);
+    void importCookies(const std::map<std::string, std::string>& cookies);
 
     // settings.json 里的其它键（与 Java 版共用），例如 audio_quality
     std::string getSetting(const std::string& key) const;

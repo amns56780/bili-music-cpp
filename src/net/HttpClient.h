@@ -8,6 +8,8 @@ namespace net {
 struct HttpResponse {
     int status = 0;
     std::string body;
+    // 原始响应头（只收 Set-Cookie，扫码登录要靠它拿 SESSDATA 等 Cookie）
+    std::vector<std::pair<std::string, std::string>> setCookies;  // name -> value
 };
 
 // 极简同步 HTTP GET（WinHTTP，无第三方依赖）。

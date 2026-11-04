@@ -137,6 +137,21 @@ int main(int argc, char** argv) {
 
     // 控制台自检：.ilimusic.exe --check-bili BV1xx411c7mD
     // 用来在不启动 UI 的情况下验证 Cookie / WBI 签名 / 取流链路。
+    // 扫码登录自检：.\bilimusic.exe --qr-test
+    if (argc > 1 && std::string(argv[1]) == "--qr-test") {
+        bili::BiliService service;
+        service.init();
+        const bili::QrCodeInfo qr = service.qrGenerate();
+        std::printf("qr generate ok=%d url=%s key=%s msg=%s\n", qr.ok ? 1 : 0, qr.url.c_str(),
+                    qr.key.c_str(), qr.message.c_str());
+        if (!qr.ok) return 1;
+        const bili::QrPollInfo poll = service.qrPoll(qr.key);
+        std::printf("qr poll ok=%d success=%d scanned=%d expired=%d cookies=%zu msg=%s\n",
+                    poll.ok ? 1 : 0, poll.success ? 1 : 0, poll.scanned ? 1 : 0,
+                    poll.expired ? 1 : 0, poll.cookies.size(), poll.message.c_str());
+        return 0;
+    }
+
     if (argc > 2 && std::string(argv[1]) == "--check-bili") {
         bili::BiliService service;
         service.init();

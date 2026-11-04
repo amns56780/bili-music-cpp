@@ -1,5 +1,6 @@
 #include "app/App.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <thread>
@@ -77,6 +78,28 @@ std::string qualityNameForId(int qualityId) {
         case 30251: return "Hi-Res";
         case 30250: return "杜比";
         default: return "自动";
+    }
+}
+
+void drawQrCode(const util::QrMatrix& matrix, ImVec2 topLeft, float targetSize) {
+    if (!matrix.valid()) return;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const int modules = matrix.size;
+    float moduleSize = std::floor(targetSize / (float)modules);
+    if (moduleSize < 1.0f) moduleSize = 1.0f;
+    const float pixelSize = moduleSize * (float)modules;
+    const float padding = 10.0f;
+    draw->AddRectFilled(ImVec2(topLeft.x - padding, topLeft.y - padding),
+                        ImVec2(topLeft.x + pixelSize + padding, topLeft.y + pixelSize + padding),
+                        IM_COL32(255, 255, 255, 255), 8.0f);
+    for (int y = 0; y < modules; ++y) {
+        for (int x = 0; x < modules; ++x) {
+            if (matrix.modules[(size_t)y * (size_t)modules + (size_t)x] == 0) continue;
+            draw->AddRectFilled(
+                ImVec2(topLeft.x + x * moduleSize, topLeft.y + y * moduleSize),
+                ImVec2(topLeft.x + (x + 1) * moduleSize, topLeft.y + (y + 1) * moduleSize),
+                IM_COL32(16, 16, 18, 255));
+        }
     }
 }
 
@@ -355,6 +378,60 @@ void App::checkPlaybackStall() {
     startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
 }
 
+void App::cancelQrLogin() {
+    if (qrCancel_) qrCancel_->store(true);
+    qrCancel_.reset();
+    qrState_ = QrState::Idle;
+    qrMatrix_ = {};
+    qrMessage_.clear();
+}
+
+void App::startQrLogin() {
+    cancelQrLogin();
+    qrState_ = QrState::Loading;
+    qrMessage_ = "正在获取二维码…";
+    auto token = std::make_shared<std::atomic<bool>>(false);
+    qrCancel_ = token;
+    std::thread([this, token]() {
+        const bili::QrCodeInfo info = bili_.qrGenerate();
+        if (token->load()) return;
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::QrGenerate;
+        event.ok = info.ok;
+        event.qrUrl = info.url;
+        event.qrKey = info.key;
+        event.message = info.message;
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::startQrPolling(const std::string& qrKey) {
+    auto token = qrCancel_;
+    if (!token) {
+        token = std::make_shared<std::atomic<bool>>(false);
+        qrCancel_ = token;
+    }
+    std::thread([this, qrKey, token]() {
+        for (int round = 0; round < 90; ++round) {  // 最长 3 分钟
+            for (int slice = 0; slice < 20; ++slice) {
+                if (token->load()) return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (token->load()) return;
+            const bili::QrPollInfo info = bili_.qrPoll(qrKey);
+            if (token->load()) return;
+            AsyncEvent event;
+            event.kind = AsyncEvent::Kind::QrPoll;
+            event.ok = info.ok;
+            event.qrStatus = info.success ? 3 : (info.expired ? 2 : (info.scanned ? 1 : 0));
+            event.qrCookies = info.cookies;
+            event.message = info.message;
+            postAsync(std::move(event));
+            if (info.success || info.expired) return;
+        }
+    }).detach();
+}
+
 void App::applyQualitySelection(int qualityId) {
     qualityId_ = qualityId;
     bili_.setSetting("audio_quality", qualityKeyForId(qualityId));
@@ -381,6 +458,51 @@ void App::pollAsync() {
             } else {
                 setStatus(event.ok ? "Cookie 无效或已过期，请重新登录" : "登录态校验失败：" + event.message,
                           true);
+            }
+            continue;
+        }
+        if (event.kind == AsyncEvent::Kind::QrGenerate) {
+            if (!qrCancel_) continue;  // 已被取消
+            if (!event.ok) {
+                qrState_ = QrState::Idle;
+                qrMessage_ = "获取二维码失败：" + event.message;
+                setStatus(qrMessage_, true);
+                continue;
+            }
+            qrKey_ = event.qrKey;
+            if (!util::makeQrMatrix(event.qrUrl, &qrMatrix_)) {
+                qrState_ = QrState::Idle;
+                qrMessage_ = "二维码生成失败";
+                continue;
+            }
+            qrState_ = QrState::Waiting;
+            qrMessage_ = "等待扫码…";
+            startQrPolling(event.qrKey);
+            continue;
+        }
+        if (event.kind == AsyncEvent::Kind::QrPoll) {
+            if (!qrCancel_) continue;
+            switch (event.qrStatus) {
+                case 1:
+                    qrState_ = QrState::Scanned;
+                    qrMessage_ = "已扫码，请在手机上确认";
+                    break;
+                case 2:
+                    qrState_ = QrState::Expired;
+                    qrMessage_ = "二维码已过期";
+                    break;
+                case 3:
+                    bili_.importCookies(event.qrCookies);
+                    accountLoggedIn_ = true;
+                    qrState_ = QrState::Success;
+                    qrMessage_ = "登录成功";
+                    qrCloseRequested_ = true;
+                    setStatus("扫码登录成功，正在同步账号信息…");
+                    startLoginCheck();
+                    break;
+                default:
+                    if (!event.ok && !event.message.empty()) qrMessage_ = event.message;
+                    break;
             }
             continue;
         }
@@ -448,6 +570,8 @@ void App::drawDialogs() {
     if (loginDialogRequested_) {
         ImGui::OpenPopup("登录 B 站");
         loginDialogRequested_ = false;
+        loginTabQr_ = true;
+        startQrLogin();
     }
 
     if (ImGui::BeginPopupModal("播放链接", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -467,34 +591,100 @@ void App::drawDialogs() {
         ImGui::EndPopup();
     }
 
+    ImGui::SetNextWindowPos(ImVec2(display.x * 0.5f, display.y * 0.5f), ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("登录 B 站", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("浏览器登录 bilibili.com 后，把整段 Cookie 粘贴到这里：");
-        ImGui::TextDisabled("格式：SESSDATA=xxx; bili_jct=yyy; DedeUserID=123; ...");
-        ImGui::InputTextMultiline("##cookie", cookieInput_, sizeof(cookieInput_), ImVec2(560.0f, 200.0f));
-        ImGui::Spacing();
-        if (ImGui::Button("保存并登录", ImVec2(130.0f, 32.0f))) {
-            const int count = bili_.importCookieText(cookieInput_);
-            if (count > 0) {
-                setStatus("Cookie 已保存，正在验证登录态…");
-                startLoginCheck();
-            } else {
-                setStatus("Cookie 解析失败：没找到 key=value", true);
+        if (qrCloseRequested_) {
+            qrCloseRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        // Tab 切换
+        if (ImGui::Selectable("扫码登录", loginTabQr_, 0, ImVec2(110.0f, 30.0f))) {
+            if (!loginTabQr_) {
+                loginTabQr_ = true;
+                startQrLogin();
             }
-            cookieInput_[0] = '\0';
-            ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("清除登录", ImVec2(110.0f, 32.0f))) {
-            bili_.clearCookie();
-            accountLoggedIn_ = false;
-            accountName_.clear();
-            accountId_ = 0;
-            setStatus("已退出登录");
-            ImGui::CloseCurrentPopup();
+        if (ImGui::Selectable("粘贴 Cookie", !loginTabQr_, 0, ImVec2(120.0f, 30.0f))) {
+            if (loginTabQr_) {
+                loginTabQr_ = false;
+                cancelQrLogin();
+            }
         }
-        ImGui::SameLine();
-        if (ImGui::Button("关闭", ImVec2(100.0f, 32.0f)) || escapePressed) ImGui::CloseCurrentPopup();
+        ImGui::Separator();
+
+        if (loginTabQr_) {
+            ImGui::TextUnformatted("用 B 站手机 App 扫下面的二维码：");
+            const float qrTarget = 200.0f;
+            const float box = qrTarget + 24.0f;
+            const ImVec2 qrOrigin = ImGui::GetCursorScreenPos();
+            const ImVec2 qrTopLeft(qrOrigin.x + 12.0f, qrOrigin.y + 12.0f);
+            ImGui::Dummy(ImVec2(box, box));
+            if (qrMatrix_.valid()) {
+                drawQrCode(qrMatrix_, qrTopLeft, qrTarget);
+            } else {
+                ImGui::SetCursorScreenPos(ImVec2(qrTopLeft.x + 20.0f, qrTopLeft.y + qrTarget * 0.5f - 10.0f));
+                ImGui::TextDisabled("%s", qrMessage_.empty() ? "正在获取二维码…" : qrMessage_.c_str());
+            }
+            ImGui::Spacing();
+            switch (qrState_) {
+                case QrState::Loading:
+                    ImGui::TextDisabled("正在获取二维码…");
+                    break;
+                case QrState::Waiting:
+                    ImGui::TextDisabled("等待扫码…（二维码 3 分钟内有效）");
+                    break;
+                case QrState::Scanned:
+                    ImGui::TextColored(ImVec4(0.93f, 0.25f, 0.25f, 1.0f), "已扫码，请在手机上确认登录");
+                    break;
+                case QrState::Expired:
+                    ImGui::TextColored(ImVec4(0.93f, 0.25f, 0.25f, 1.0f), "二维码已过期，请刷新");
+                    break;
+                case QrState::Success:
+                    ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.45f, 1.0f), "登录成功");
+                    break;
+                default:
+                    if (!qrMessage_.empty()) ImGui::TextDisabled("%s", qrMessage_.c_str());
+                    break;
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("刷新二维码", ImVec2(120.0f, 32.0f))) startQrLogin();
+            ImGui::SameLine();
+            if (ImGui::Button("关闭", ImVec2(100.0f, 32.0f)) || escapePressed) ImGui::CloseCurrentPopup();
+        } else {
+            ImGui::TextUnformatted("浏览器登录 bilibili.com 后，把整段 Cookie 粘贴到这里：");
+            ImGui::TextDisabled("格式：SESSDATA=xxx; bili_jct=yyy; DedeUserID=123; ...");
+            ImGui::InputTextMultiline("##cookie", cookieInput_, sizeof(cookieInput_),
+                                      ImVec2(560.0f, 200.0f));
+            ImGui::Spacing();
+            if (ImGui::Button("保存并登录", ImVec2(130.0f, 32.0f))) {
+                const int count = bili_.importCookieText(cookieInput_);
+                if (count > 0) {
+                    setStatus("Cookie 已保存，正在验证登录态…");
+                    startLoginCheck();
+                } else {
+                    setStatus("Cookie 解析失败：没找到 key=value", true);
+                }
+                cookieInput_[0] = '\0';
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("清除登录", ImVec2(110.0f, 32.0f))) {
+                bili_.clearCookie();
+                accountLoggedIn_ = false;
+                accountName_.clear();
+                accountId_ = 0;
+                setStatus("已退出登录");
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("关闭", ImVec2(100.0f, 32.0f)) || escapePressed) ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
+    }
+    if (!ImGui::IsPopupOpen("登录 B 站") && qrState_ != QrState::Idle) {
+        cancelQrLogin();
     }
     ImGui::PopStyleVar(8);
     ImGui::PopStyleColor(11);

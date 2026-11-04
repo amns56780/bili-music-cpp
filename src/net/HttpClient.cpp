@@ -24,6 +24,38 @@ std::wstring toWide(const std::string& text) {
     return out;
 }
 
+std::string toUtf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0, nullptr,
+                                         nullptr);
+    std::string out((size_t)size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), out.data(), size, nullptr, nullptr);
+    return out;
+}
+
+void parseSetCookieHeaders(const std::wstring& rawHeaders,
+                           std::vector<std::pair<std::string, std::string>>* out) {
+    if (out == nullptr) return;
+    size_t offset = 0;
+    while (offset < rawHeaders.size()) {
+        size_t end = rawHeaders.find(L"\r\n", offset);
+        if (end == std::wstring::npos) end = rawHeaders.size();
+        const std::wstring line = rawHeaders.substr(offset, end - offset);
+        offset = end + 2;
+        const std::wstring prefix = L"Set-Cookie:";
+        if (line.size() <= prefix.size()) continue;
+        if (_wcsnicmp(line.c_str(), prefix.c_str(), prefix.size()) != 0) continue;
+        std::wstring cookieLine = line.substr(prefix.size());
+        const size_t semicolon = cookieLine.find(L';');
+        if (semicolon != std::wstring::npos) cookieLine = cookieLine.substr(0, semicolon);
+        const size_t equals = cookieLine.find(L'=');
+        if (equals == std::wstring::npos) continue;
+        const std::string name = toUtf8(cookieLine.substr(0, equals));
+        const std::string value = toUtf8(cookieLine.substr(equals + 1));
+        if (!name.empty() && !value.empty()) out->emplace_back(name, value);
+    }
+}
+
 struct WinHttpHandles {
     HINTERNET session = nullptr;
     HINTERNET connection = nullptr;
@@ -135,6 +167,19 @@ bool httpGet(const std::string& url,
                         WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize,
                         WINHTTP_NO_HEADER_INDEX);
     response->status = (int)statusCode;
+
+    // 原始响应头 → Set-Cookie（扫码登录回调里会带登录态 Cookie）
+    DWORD headerSize = 0;
+    WinHttpQueryHeaders(handles.request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX,
+                        WINHTTP_NO_OUTPUT_BUFFER, &headerSize, WINHTTP_NO_HEADER_INDEX);
+    if (headerSize > 0) {
+        std::wstring rawHeaders(headerSize / sizeof(wchar_t), L'\0');
+        if (WinHttpQueryHeaders(handles.request, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                                WINHTTP_HEADER_NAME_BY_INDEX, rawHeaders.data(), &headerSize,
+                                WINHTTP_NO_HEADER_INDEX)) {
+            parseSetCookieHeaders(rawHeaders, &response->setCookies);
+        }
+    }
 
     while (true) {
         DWORD available = 0;

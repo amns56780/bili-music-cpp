@@ -28,7 +28,7 @@
 - [x] 封面圆角/头像抗锯齿：渐变条带 + 四角扇形（AA），不再有逐行台阶
 - [x] 修复音量条每帧被重置回 80% 的问题
 
-## M2 · B 站接口与在线播放（核心链路已完成）
+## M2 · B 站接口与在线播放（已完成）
 
 - [x] WBI 签名（nav → mixin_key 重排、wts、md5 w_rid，24h 缓存）
 - [x] Cookie 与 Java 版共用 settings.json（cookie_blob），启动校验 nav、显示昵称/UID
@@ -39,7 +39,7 @@
 - [x] 音质档位 UI（自动/192K/132K/64K/Hi-Res/杜比，写入 audio_quality 与 Java 共用）
 - [x] 备用 URL 自动切换 + 起播无进度时强制重新取流（URL 过期兜底）
 - [x] 网络缓存 20s
-- [ ] 扫码登录（QR 编码）
+- [x] 扫码登录（qrcodegen 编码 + poll 轮询 + Set-Cookie 导入）
 
 ## M2 之后
 
