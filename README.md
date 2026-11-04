@@ -54,6 +54,9 @@
   切换后立即重新取流并从当前进度续播；档位写入 `settings.json` 的 `audio_quality`（AUTO/Q192/Q132/Q64/HIRES/DOLBY，与 Java 版共用）
 - [x] 播放看门狗：在线曲目起播 6s 仍无进度 → 先切备用地址，再强制重新取流（覆盖 URL 过期场景）
 - [x] 网络缓存拉到 20s（`:network-caching=20000`），暂停/恢复和弱网更稳
+- [x] 音质胶囊按文字自适应宽度（之前固定 66px 会多出一截空白）
+- [x] 音量支持鼠标滚轮微调（鼠标在音量组上滚动，每格 ±2%）
+- [x] 字体整体再调大一档（正文 18 / 次要 15 / 标题 22 / 大标题 38），行高与表格同步放大
 - [x] 扫码登录：B 站 `qrcode/generate` + `qrcode/poll` 轮询（未扫码 / 已扫码待确认 / 过期 / 成功），
   成功后从 `Set-Cookie` 与回调 URL 解析登录态 Cookie 写入 settings.json，自动刷新昵称/UID；
   二维码用内置 qrcodegen（Nayuki, MIT，third_party/qrcodegen）编码、ImGui 直接画方块

@@ -42,9 +42,9 @@ void drawPlaylistRow(const ImVec2& origin, const StoredPlaylist& playlist, const
     const float textX = pos.x + 11.0f + Dimens::CoverSide + 10.0f;
     const float textWidth = rowWidth - (textX - pos.x) - 10.0f;
     TextEllipsis(playlist.title, textWidth, GetFonts().body, Colors::Text,
-                 ImVec2(textX, pos.y + 11.0f));
+                 ImVec2(textX, pos.y + 10.0f));
     TextEllipsis(subtitle, textWidth, GetFonts().small, Colors::Text3,
-                 ImVec2(textX, pos.y + 31.0f));
+                 ImVec2(textX, pos.y + 30.0f));
     ImGui::PopID();
     if (pressed) {
         actions->selectPlaylist = true;
@@ -90,15 +90,15 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     const ImVec2 linkPos = ImGui::GetItemRectMin();
     draw->AddRectFilled(linkPos, ImVec2(linkPos.x + width - 24.0f, linkPos.y + 32.0f), Colors::Hover, 16.0f);
     const std::string linkIcon = Icons::Utf8(Icons::Link);
-    draw->AddText(GetFonts().body, 16.0f, ImVec2(linkPos.x + 12.0f, linkPos.y + 8.0f), Colors::Text3,
+    draw->AddText(GetFonts().body, 18.0f, ImVec2(linkPos.x + 12.0f, linkPos.y + 8.0f), Colors::Text3,
                   linkIcon.c_str());
-    draw->AddText(GetFonts().small, 13.0f, ImVec2(linkPos.x + 12.0f + 16.0f + 8.0f, linkPos.y + 10.0f),
+    draw->AddText(GetFonts().small, 15.0f, ImVec2(linkPos.x + 12.0f + 16.0f + 8.0f, linkPos.y + 10.0f),
                   Colors::Text3, "粘贴链接 / BV 号播放");
     ImGui::PopID();
     if (linkPressed) actions->pasteLink = true;
 
     // ---------------- 分组标题 ----------------
-    draw->AddText(GetFonts().small, 13.0f, abs(18.0f, 116.0f), Colors::Text3, "我的歌单");
+    draw->AddText(GetFonts().small, 15.0f, abs(18.0f, 116.0f), Colors::Text3, "我的歌单");
     ImGui::SetCursorPos(ImVec2(width - 10.0f - 28.0f, 106.0f));
     if (IconButton("##new_playlist", Icons::Add, 28.0f, 16.0f, Colors::Text2, false, true,
                    "新建歌单（M3 实现）")) {
@@ -134,7 +134,7 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     const float dividerY = height - bottomArea;
     if (!statusText.empty()) {
         TextEllipsis(statusText, width - 24.0f, GetFonts().small,
-                     statusIsError ? Colors::Brand : Colors::Text3, abs(12.0f, dividerY - 20.0f));
+                     statusIsError ? Colors::Brand : Colors::Text3, abs(12.0f, dividerY - 22.0f));
     }
     DividerLine(0.0f, width, dividerY);
 

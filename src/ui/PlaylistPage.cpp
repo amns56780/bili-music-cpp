@@ -54,8 +54,8 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     ImDrawList* draw = ImGui::GetWindowDrawList();
 
     if (playlist == nullptr) {
-        draw->AddText(GetFonts().xl, 34.0f, abs(34.0f, 34.0f), Colors::Text3, "还没有选中的歌单");
-        draw->AddText(GetFonts().small, 13.0f, abs(34.0f, 80.0f), Colors::Text3,
+        draw->AddText(GetFonts().xl, 38.0f, abs(34.0f, 34.0f), Colors::Text3, "还没有选中的歌单");
+        draw->AddText(GetFonts().small, 15.0f, abs(34.0f, 80.0f), Colors::Text3,
                       "左侧挑一个歌单；数据来自 Java 版共用的 playlists.json。");
         return;
     }
@@ -78,7 +78,7 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     std::string meta = std::to_string(store.songCount(playlist->id)) + " 首";
     if (!created.empty()) meta += " · " + created + " 创建";
     meta += " · " + sourceLabel(playlist->sourceType);
-    draw->AddText(GetFonts().small, 13.0f, abs(infoX, coverY + 78.0f), Colors::Text2, meta.c_str());
+    draw->AddText(GetFonts().small, 15.0f, abs(infoX, coverY + 78.0f), Colors::Text2, meta.c_str());
     // 标签行
     TagChip("手动新建", abs(infoX, coverY + 104.0f));
     TagChip("B站音源", abs(infoX + 74.0f, coverY + 104.0f));
@@ -109,12 +109,12 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     const float rowWidth = contentWidth - rowX * 2.0f;
     const float artistX = rowX + rowWidth - 66.0f - 210.0f;
 
-    draw->AddText(GetFonts().small, 13.0f, abs(rowX + 48.0f - 8.0f, tableTop + 10.0f), Colors::Text3, "#");
-    draw->AddText(GetFonts().small, 13.0f, abs(rowX + 48.0f + 24.0f, tableTop + 10.0f), Colors::Text3, "音乐标题");
-    draw->AddText(GetFonts().small, 13.0f, abs(artistX, tableTop + 10.0f), Colors::Text3, "UP主");
-    const float durationHeaderWidth = MeasureText(GetFonts().small, 13.0f, "时长");
-    draw->AddText(GetFonts().small, 13.0f,
-                  abs(rowX + rowWidth - 30.0f - durationHeaderWidth + 12.0f, tableTop + 10.0f),
+    draw->AddText(GetFonts().small, 15.0f, abs(rowX + 48.0f - 8.0f, tableTop + 9.0f), Colors::Text3, "#");
+    draw->AddText(GetFonts().small, 15.0f, abs(rowX + 48.0f + 24.0f, tableTop + 9.0f), Colors::Text3, "音乐标题");
+    draw->AddText(GetFonts().small, 15.0f, abs(artistX, tableTop + 9.0f), Colors::Text3, "UP主");
+    const float durationHeaderWidth = MeasureText(GetFonts().small, 15.0f, "时长");
+    draw->AddText(GetFonts().small, 15.0f,
+                  abs(rowX + rowWidth - 30.0f - durationHeaderWidth + 12.0f, tableTop + 9.0f),
                   Colors::Text3, "时长");
     DividerLine(rowX, rowX + rowWidth, tableTop + Dimens::TableHeaderHeight);
 
@@ -144,24 +144,24 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         // 序号 / 播放中图标
         if (isPlaying) {
             const std::string note = Icons::Utf8(Icons::GraphicEq);
-            draw->AddText(GetFonts().small, 13.0f, ImVec2(pos.x + 26.0f, pos.y + 14.0f), Colors::Brand,
+            draw->AddText(GetFonts().small, 15.0f, ImVec2(pos.x + 26.0f, pos.y + 14.0f), Colors::Brand,
                           note.c_str());
         } else {
             char index[16];
             std::snprintf(index, sizeof(index), "%d", (int)(i + 1));
-            const float indexWidth = MeasureText(GetFonts().small, 13.0f, index);
-            draw->AddText(GetFonts().small, 13.0f, ImVec2(pos.x + 48.0f - indexWidth, pos.y + 15.0f),
+            const float indexWidth = MeasureText(GetFonts().small, 15.0f, index);
+            draw->AddText(GetFonts().small, 15.0f, ImVec2(pos.x + 48.0f - indexWidth, pos.y + 15.0f),
                           Colors::Text3, index);
         }
         // 标题
         TextEllipsis(song.title, artistX - (pos.x + 48.0f + 24.0f) - 16.0f, GetFonts().body,
-                     isPlaying ? Colors::Brand : Colors::Text, ImVec2(pos.x + 48.0f + 24.0f, pos.y + 12.0f));
+                     isPlaying ? Colors::Brand : Colors::Text, ImVec2(pos.x + 48.0f + 24.0f, pos.y + 11.0f));
         // UP主
-        TextEllipsis(song.artist, 200.0f, GetFonts().small, Colors::Text2, ImVec2(artistX, pos.y + 14.0f));
+        TextEllipsis(song.artist, 230.0f, GetFonts().small, Colors::Text2, ImVec2(artistX, pos.y + 12.0f));
         // 时长
         const std::string duration = formatDuration(song.durationMs);
-        const float durationWidth = MeasureText(GetFonts().small, 13.0f, duration);
-        draw->AddText(GetFonts().small, 13.0f,
+        const float durationWidth = MeasureText(GetFonts().small, 15.0f, duration);
+        draw->AddText(GetFonts().small, 15.0f,
                       ImVec2(pos.x + rowWidth - 30.0f - durationWidth, pos.y + 15.0f), Colors::Text3,
                       duration.c_str());
         if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {

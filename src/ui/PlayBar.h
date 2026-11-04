@@ -37,6 +37,7 @@ struct PlayBarActions {
     bool download = false;
     bool qualitySelected = false;
     int qualityId = 0;
+    float volumeWheelDelta = 0.0f;  // 鼠标滚轮微调音量（正值增大）
 };
 
 // 底部播放条（76px）：当前曲目 / 控制 + 进度 / 音量 + 输出设备 / 定时 / 队列。

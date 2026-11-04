@@ -252,8 +252,8 @@ bool PrimaryButton(const char* id, const std::string& label, uint32_t icon, floa
     ImGui::PushID(id);
     const ImFont* font = GetFonts().body;
     const std::string glyph = icon != 0 ? Icons::Utf8(icon) : std::string();
-    const float iconWidth = glyph.empty() ? 0.0f : textWidth(GetFonts().body, 16.0f, glyph) + 7.0f;
-    const float labelWidth = textWidth(GetFonts().body, 16.0f, label);
+    const float iconWidth = glyph.empty() ? 0.0f : textWidth(GetFonts().body, 17.0f, glyph) + 7.0f;
+    const float labelWidth = textWidth(GetFonts().body, 18.0f, label);
     const float width = labelWidth + iconWidth + 28.0f;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const bool pressed = ImGui::InvisibleButton("##primary", ImVec2(width, height));
@@ -264,10 +264,11 @@ bool PrimaryButton(const char* id, const std::string& label, uint32_t icon, floa
                         hovered ? Colors::BrandHover : Colors::Brand, height / 2);
     float x = pos.x + (width - (labelWidth + iconWidth)) / 2;
     if (!glyph.empty()) {
-        drawTextAt(GetFonts().body, 16.0f, ImVec2(x, pos.y + (height - 16.0f) / 2), Colors::White, glyph);
+        drawTextAt(GetFonts().body, 17.0f, ImVec2(x, pos.y + iconTextTopForCenter(height, 17.0f)),
+                   Colors::White, glyph);
         x += iconWidth;
     }
-    drawTextAt(GetFonts().body, 16.0f, ImVec2(x, pos.y + (height - 16.0f) / 2), Colors::White, label);
+    drawTextAt(GetFonts().body, 18.0f, ImVec2(x, pos.y + (height - 18.0f) / 2), Colors::White, label);
     (void)font;
     ImGui::PopID();
     return pressed;
@@ -276,8 +277,8 @@ bool PrimaryButton(const char* id, const std::string& label, uint32_t icon, floa
 bool GhostButton(const char* id, const std::string& label, uint32_t icon, float height) {
     ImGui::PushID(id);
     const std::string glyph = icon != 0 ? Icons::Utf8(icon) : std::string();
-    const float iconWidth = glyph.empty() ? 0.0f : textWidth(GetFonts().body, 16.0f, glyph) + 6.0f;
-    const float labelWidth = textWidth(GetFonts().body, 16.0f, label);
+    const float iconWidth = glyph.empty() ? 0.0f : textWidth(GetFonts().body, 17.0f, glyph) + 6.0f;
+    const float labelWidth = textWidth(GetFonts().body, 18.0f, label);
     const float width = labelWidth + iconWidth + 26.0f;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const bool pressed = ImGui::InvisibleButton("##ghost", ImVec2(width, height));
@@ -289,10 +290,11 @@ bool GhostButton(const char* id, const std::string& label, uint32_t icon, float 
     }
     float x = pos.x + (width - (labelWidth + iconWidth)) / 2;
     if (!glyph.empty()) {
-        drawTextAt(GetFonts().body, 16.0f, ImVec2(x, pos.y + (height - 14.0f) / 2), Colors::Text2, glyph);
+        drawTextAt(GetFonts().body, 17.0f, ImVec2(x, pos.y + iconTextTopForCenter(height, 17.0f)),
+                   Colors::Text2, glyph);
         x += iconWidth;
     }
-    drawTextAt(GetFonts().body, 16.0f, ImVec2(x, pos.y + (height - 14.0f) / 2), Colors::Text2, label);
+    drawTextAt(GetFonts().body, 18.0f, ImVec2(x, pos.y + (height - 18.0f) / 2), Colors::Text2, label);
     ImGui::PopID();
     return pressed;
 }
@@ -309,11 +311,11 @@ bool SidebarAction(const char* id, uint32_t icon, const std::string& label, floa
         draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height), Colors::Hover, 8.0f);
     }
     const std::string glyph = Icons::Utf8(icon);
-    const float iconWidth = textWidth(GetFonts().body, 15.0f, glyph);
-    drawTextAt(GetFonts().body, 15.0f, ImVec2(pos.x + 10.0f, pos.y + (height - 15.0f) / 2),
-               Colors::Text2, glyph);
-    drawTextAt(GetFonts().body, 16.0f,
-               ImVec2(pos.x + 10.0f + iconWidth + 10.0f, pos.y + (height - 14.0f) / 2), Colors::Text2, label);
+    const float iconWidth = textWidth(GetFonts().body, 17.0f, glyph);
+    drawTextAt(GetFonts().body, 17.0f,
+               ImVec2(pos.x + 10.0f, pos.y + iconTextTopForCenter(height, 17.0f)), Colors::Text2, glyph);
+    drawTextAt(GetFonts().body, 18.0f,
+               ImVec2(pos.x + 10.0f + iconWidth + 10.0f, pos.y + (height - 18.0f) / 2), Colors::Text2, label);
     ImGui::PopID();
     return pressed;
 }
@@ -452,11 +454,11 @@ void CoverPlaceholder(const std::string& seed, ImVec2 pos, float size, float rad
 
 void TagChip(const std::string& text, ImVec2 pos) {
     ImFont* font = GetFonts().small;
-    const float width = textWidth(font, 12.0f, text);
-    const ImVec2 end = ImVec2(pos.x + width + 16.0f, pos.y + 22.0f);
+    const float width = textWidth(font, 15.0f, text);
+    const ImVec2 end = ImVec2(pos.x + width + 18.0f, pos.y + 26.0f);
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(pos, end, Colors::TagBg, 4.0f);
-    drawTextAt(font, 12.0f, ImVec2(pos.x + 8.0f, pos.y + 5.0f), Colors::Text2, text);
+    drawTextAt(font, 15.0f, ImVec2(pos.x + 9.0f, pos.y + 4.0f), Colors::Text2, text);
 }
 
 void DividerLine(float x0, float x1, float y) {

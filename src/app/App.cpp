@@ -805,6 +805,12 @@ void App::draw() {
         setStatus("播放模式：" + formatModeName(mode_));
     }
     if (playBarActions.seekFinished) engine_.seekMs((int64_t)playBarActions.seekMs);
+    if (playBarActions.volumeWheelDelta != 0.0f) {
+        // 滚轮微调：每格 2%
+        int next = volume_ + (int)std::lround(playBarActions.volumeWheelDelta * 2.0f);
+        volume_ = next < 0 ? 0 : (next > 100 ? 100 : next);
+        engine_.setVolume(volume_);
+    }
     if (playBarActions.volumeChanged || playBarActions.volumeFinished) {
         volume_ = playBarActions.volume;
         engine_.setVolume(volume_);

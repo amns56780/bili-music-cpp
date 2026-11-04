@@ -40,8 +40,8 @@ inline constexpr float PlayerHeight = 72.0f;
 inline constexpr float CoverBig = 196.0f;
 inline constexpr float CoverSide = 36.0f;
 inline constexpr float CoverPlayer = 50.0f;
-inline constexpr float RowHeight = 44.0f;
-inline constexpr float TableHeaderHeight = 34.0f;
+inline constexpr float RowHeight = 46.0f;
+inline constexpr float TableHeaderHeight = 36.0f;
 inline constexpr float ContentPaddingX = 34.0f;
 inline constexpr float GapXs = 4.0f;
 inline constexpr float GapSm = 8.0f;
@@ -55,11 +55,11 @@ inline constexpr float RadiusTag = 4.0f;
 
 // 字号（比 Java 版整体调大一档：正文 16、次要 13、标题 20、大标题 34）
 namespace FontSize {
-inline constexpr float Body = 16.0f;
-inline constexpr float Small = 13.0f;
-inline constexpr float Title = 20.0f;
-inline constexpr float Xl = 34.0f;
-inline constexpr float IconBig = 22.0f;
+inline constexpr float Body = 18.0f;
+inline constexpr float Small = 15.0f;
+inline constexpr float Title = 22.0f;
+inline constexpr float Xl = 38.0f;
+inline constexpr float IconBig = 24.0f;
 }  // namespace FontSize
 
 struct Fonts {

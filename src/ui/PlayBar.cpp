@@ -85,7 +85,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     const float ratio = data.durationMs > 0.0 ? (float)(data.positionMs / data.durationMs) : 0.0f;
     const std::string posText = formatTime(seeking ? seekDraft * data.durationMs : data.positionMs);
     const std::string durText = data.durationMs > 0.0 ? formatTime(data.durationMs) : "--:--";
-    draw->AddText(GetFonts().small, 13.0f, abs(progressLeft, 50.0f), Colors::Text3, posText.c_str());
+    draw->AddText(GetFonts().small, 15.0f, abs(progressLeft, 49.0f), Colors::Text3, posText.c_str());
     ImGui::SetCursorPos(ImVec2(progressLeft + 38.0f, 50.0f));
     float sliderValue = seeking ? seekDraft : (ratio < 0.0f ? 0.0f : (ratio > 1.0f ? 1.0f : ratio));
     const SliderResult seekResult =
@@ -99,9 +99,9 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         actions->seekFinished = true;
         actions->seekMs = (double)seekDraft * data.durationMs;
     }
-    const float durationWidth = MeasureText(GetFonts().small, 13.0f, durText);
-    draw->AddText(GetFonts().small, 13.0f,
-                  abs(progressRight - durationWidth, 50.0f), Colors::Text3, durText.c_str());
+    const float durationWidth = MeasureText(GetFonts().small, 15.0f, durText);
+    draw->AddText(GetFonts().small, 15.0f,
+                  abs(progressRight - durationWidth, 49.0f), Colors::Text3, durText.c_str());
 
     // ---------------- 右：音量 / 输出设备 / 定时 / 队列 ----------------
     const float rightWidth = 290.0f;
@@ -118,8 +118,12 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
 
     // 音质档位（仅在线曲目）：进度条和音量组之间的空档里放一个小胶囊
     if (data.showQuality) {
-        const float chipWidth = 66.0f;
-        const float chipHeight = 22.0f;
+        // 胶囊宽度按文字自适应（之前固定 66px，短档位会多出一截空白）
+        const float labelWidth = MeasureText(GetFonts().small, FontSize::Small, data.qualityLabel);
+        float chipWidth = 12.0f + labelWidth + 14.0f;
+        const float maxChipWidth = rightLeft - (progressRight + 8.0f) - 6.0f;
+        if (chipWidth > maxChipWidth) chipWidth = maxChipWidth;
+        const float chipHeight = 24.0f;
         const float chipX = progressRight + 8.0f;
         const float chipY = rightCenterY - chipHeight / 2.0f;
         ImGui::PushID("quality_chip");
@@ -130,7 +134,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         draw->AddRectFilled(abs(chipX, chipY), abs(chipX + chipWidth, chipY + chipHeight),
                             qualityHovered ? Colors::Hover : Colors::TagBg, 11.0f);
         TextEllipsis(data.qualityLabel, chipWidth - 24.0f, GetFonts().small, Colors::Text2,
-                     abs(chipX + 7.0f, chipY + 3.0f));
+                     abs(chipX + 8.0f, chipY + 4.0f));
         // 下拉小三角用几何图形画（字体里没有 ▾ 字形）
         const ImVec2 arrow(chipX + chipWidth - 12.0f, chipY + chipHeight / 2.0f);
         draw->AddTriangleFilled(ImVec2(arrow.x - 4.0f, arrow.y - 2.0f),
@@ -164,7 +168,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         ImGui::PopID();
     }
 
-    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 6.0f), Colors::Text2,
+    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 7.0f), Colors::Text2,
                   volumeIcon.c_str());
     static bool volumeDragging = false;
     static float volumeDraft = 0.8f;
@@ -186,9 +190,19 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     const std::string volumeText =
         (int)std::lround(volumeValue * 100.0f) == 0 ? "静音" :
         std::to_string((int)std::lround(volumeValue * 100.0f)) + "%";
-    const float volumeTextWidth = MeasureText(GetFonts().small, 13.0f, volumeText);
-    draw->AddText(GetFonts().small, 13.0f, abs(rightLeft + 24.0f + 110.0f + 6.0f + 34.0f - volumeTextWidth, rightCenterY - 4.0f),
+    const float volumeTextWidth = MeasureText(GetFonts().small, 15.0f, volumeText);
+    draw->AddText(GetFonts().small, 15.0f, abs(rightLeft + 24.0f + 110.0f + 6.0f + 34.0f - volumeTextWidth, rightCenterY - 5.0f),
                   Colors::Text3, volumeText.c_str());
+    // 滚轮微调音量：鼠标在音量组（图标+滑条+百分比）上时，滚轮 ±2%
+    {
+        const ImVec2 volumeMin = abs(rightLeft - 2.0f, rightCenterY - 16.0f);
+        const ImVec2 volumeMax = abs(rightLeft + 174.0f, rightCenterY + 16.0f);
+        if (ImGui::IsMouseHoveringRect(volumeMin, volumeMax)) {
+            const float wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.0f) actions->volumeWheelDelta = wheel;
+        }
+    }
+
     ImGui::SetCursorPos(ImVec2(rightLeft + 182.0f, rightCenterY - 14.0f));
     if (IconButton("output_device", Icons::Headset, 28.0f, 16.0f, Colors::Text2, false, true, "输出设备（M4）")) {
         actions->openOutputDevice = true;
