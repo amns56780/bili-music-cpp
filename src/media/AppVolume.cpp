@@ -115,6 +115,10 @@ bool AppVolume::ensureSession() {
     if (sessionVolume_ != nullptr) return true;
     if (sessionManager_ == nullptr) return false;
 
+    // 新音频会话（换曲/换输出设备）会话音量由系统重置为 100%，
+    // 这里清掉旧的缓存值，保证下面 setVolume 一定会把用户音量重新写进去。
+    lastVolume_ = -1;
+
     // 会话在第一次出声之后才创建：限频重试，别每一帧都枚举一遍
     const uint64_t now = GetTickCount64();
     if (lastRetryTick_ != 0 && now - lastRetryTick_ < 500) return false;

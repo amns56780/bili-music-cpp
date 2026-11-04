@@ -32,6 +32,7 @@ public:
 
 private:
     static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+    static LRESULT CALLBACK keyboardProc(int code, WPARAM wparam, LPARAM lparam);
     void showContextMenu();
     void dispatch(int command);
 
@@ -39,7 +40,7 @@ private:
     HICON icon_ = nullptr;
     TrayCallbacks callbacks_;
     bool iconAdded_ = false;
-    bool hotkeysRegistered_ = false;
+    HHOOK keyboardHook_ = nullptr;
 };
 
 }  // namespace platform

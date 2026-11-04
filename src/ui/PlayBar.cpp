@@ -50,7 +50,8 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
                Dimens::CoverPlayer, 9.0f, data.coverUrl, data.coverPath);
     TextEllipsis(data.title, 236.0f, GetFonts().body, Colors::Text, abs(80.0f, 20.0f));
     TextEllipsis(data.artist, 236.0f, GetFonts().small, Colors::Text3, abs(80.0f, 39.0f));
-    ImGui::SetCursorPos(ImVec2(18.0f + 330.0f - 32.0f, 11.0f));
+    // 与右侧音量条同一水平中心线（用户反馈：原来偏高，下移与音量条齐平）
+    ImGui::SetCursorPos(ImVec2(18.0f + 330.0f - 32.0f, 22.0f));
     if (IconButton("download_current", Icons::Download, 32.0f, 17.0f, Colors::Text2, false,
                    data.hasMedia, "下载当前曲目（M3）")) {
         actions->download = true;

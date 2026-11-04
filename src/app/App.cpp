@@ -1778,6 +1778,19 @@ void App::draw() {
     syncPlaybackState();
 
     ImGuiIO& io = ImGui::GetIO();
+
+    // 窗口内快捷键：空格 = 播放/暂停，[ = 上一首，] = 下一首（输入框/弹窗时不触发）
+    if (!io.WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) togglePlayback();
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
+            playPrevious();
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+            playNext();
+        }
+    }
     const float titleBarHeight = Ui::Dimens::TitleBarHeight;
     const float playerHeight = Ui::Dimens::PlayerHeight;
     const float mainHeight = io.DisplaySize.y - titleBarHeight - playerHeight;

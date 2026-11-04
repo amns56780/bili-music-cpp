@@ -70,35 +70,24 @@ bool SystemTray::init(const std::string& tooltip, TrayCallbacks callbacks) {
     data.uVersion = NOTIFYICON_VERSION_4;
     Shell_NotifyIconW(NIM_SETVERSION, &data);
 
-    hotkeysRegistered_ = true;
-    struct {
-        int id;
-        UINT key;
-    } hotkeys[] = {
-        {kHotkeyPlayPause, VK_MEDIA_PLAY_PAUSE},
-        {kHotkeyNext, VK_MEDIA_NEXT_TRACK},
-        {kHotkeyPrevious, VK_MEDIA_PREV_TRACK},
-        {kHotkeyStop, VK_MEDIA_STOP},
-    };
-    for (const auto& hotkey : hotkeys) {
-        if (RegisterHotKey(hwnd_, hotkey.id, kModNoRepeat, hotkey.key) == FALSE) {
-            hotkeysRegistered_ = false;
-            AppLog::warn("Tray", "注册媒体快捷键失败（可能被其它程序占用）");
-        }
+    // 全局键盘钩子：媒体键 / Ctrl+Alt+Space/←/→ 都能用，
+    // 不依赖 RegisterHotKey（那个容易被其它播放器/系统媒体控制占用而注册失败）。
+    keyboardHook_ = SetWindowsHookExW(WH_KEYBOARD_LL, &SystemTray::keyboardProc,
+                                      GetModuleHandleW(nullptr), 0);
+    if (keyboardHook_ == nullptr) {
+        AppLog::warn("Tray", "安装全局键盘钩子失败（快捷键不可用）");
     }
-    AppLog::info("Tray", std::string("系统托盘初始化完成 icon=") + (iconAdded_ ? "ok" : "fail"));
+    AppLog::info("Tray", std::string("系统托盘初始化完成 icon=") + (iconAdded_ ? "ok" : "fail") +
+                            " hotkey=" + (keyboardHook_ != nullptr ? "ok" : "fail"));
     return true;
 }
 
 void SystemTray::shutdown() {
+    if (keyboardHook_ != nullptr) {
+        UnhookWindowsHookEx(keyboardHook_);
+        keyboardHook_ = nullptr;
+    }
     if (hwnd_ != nullptr) {
-        if (hotkeysRegistered_) {
-            UnregisterHotKey(hwnd_, kHotkeyPlayPause);
-            UnregisterHotKey(hwnd_, kHotkeyNext);
-            UnregisterHotKey(hwnd_, kHotkeyPrevious);
-            UnregisterHotKey(hwnd_, kHotkeyStop);
-            hotkeysRegistered_ = false;
-        }
         if (iconAdded_) {
             NOTIFYICONDATAW data{};
             data.cbSize = sizeof(data);
@@ -153,6 +142,51 @@ void SystemTray::dispatch(int command) {
         default:
             break;
     }
+}
+
+LRESULT CALLBACK SystemTray::keyboardProc(int code, WPARAM wparam, LPARAM lparam) {
+    if (code == HC_ACTION) {
+        SystemTray* tray = gActiveTray;
+        const KBDLLHOOKSTRUCT* info = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
+        if (tray != nullptr && info != nullptr &&
+            (wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN)) {
+            switch (info->vkCode) {
+                case VK_MEDIA_PLAY_PAUSE:
+                case VK_MEDIA_STOP:
+                    tray->dispatch(kMenuTogglePlay);
+                    return 1;
+                case VK_MEDIA_NEXT_TRACK:
+                    tray->dispatch(kMenuNext);
+                    return 1;
+                case VK_MEDIA_PREV_TRACK:
+                    tray->dispatch(kMenuPrevious);
+                    return 1;
+                default:
+                    break;
+            }
+            const bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            const bool altDown = (GetKeyState(VK_MENU) & 0x8000) != 0;
+            if (ctrlDown && altDown) {
+                switch (info->vkCode) {
+                    case 'H':
+                        tray->dispatch(kMenuShow);
+                        return 1;
+                    case VK_SPACE:
+                        tray->dispatch(kMenuTogglePlay);
+                        return 1;
+                    case VK_LEFT:
+                        tray->dispatch(kMenuPrevious);
+                        return 1;
+                    case VK_RIGHT:
+                        tray->dispatch(kMenuNext);
+                        return 1;
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+    return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
 LRESULT CALLBACK SystemTray::windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {

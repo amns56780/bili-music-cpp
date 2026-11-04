@@ -345,7 +345,14 @@ void VlcEngine::pumpVolume() {
         if (!appVolume_.refresh() || !appVolume_.available()) return;
         const int current = appVolume_.volume();
         if (!volumeApplied_ || volumeDirty_ || current != volume_) {
-            if (!appVolume_.setVolume(volume_, /*force=*/false)) return;
+            // 换曲后新的音频会话音量默认是 100%：这里必须强制写回用户音量，
+            // 否则下一首会以系统默认音量播放，直到用户拖一下音量条才恢复。
+            const bool reapplying = !volumeApplied_;
+            if (!appVolume_.setVolume(volume_, /*force=*/true)) return;
+            if (reapplying) {
+                AppLog::info("AppVolume", "换曲后重新写入应用级音量 -> " +
+                                              std::to_string(volume_) + "%");
+            }
             if (lastVlcVolume_ != 100) {
                 api_->libvlc_audio_set_volume(player_, 100);
                 lastVlcVolume_ = 100;
