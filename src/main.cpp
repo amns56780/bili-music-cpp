@@ -21,6 +21,7 @@
 #include "media/AppVolume.h"
 #include "media/VlcEngine.h"
 #include "ui/AppIcon.h"
+#include "ui/ImageCache.h"
 #include "ui/WindowFrame.h"
 
 namespace {
@@ -230,6 +231,7 @@ int main(int argc, char** argv) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
+        Ui::PumpImageCache();
         app.draw();
 
         ImGui::Render();

@@ -8,8 +8,7 @@
 #endif
 #include <windows.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+#include "ui/ImageCache.h"
 
 #include <GLFW/glfw3.h>
 
@@ -415,73 +414,9 @@ SliderResult ThinSlider(const char* id, float* value, float width, float height,
     return result;
 }
 
-namespace {
-
-std::wstring utf8ToWide(const std::string& text) {
-    if (text.empty()) return {};
-    const int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0);
-    std::wstring out((size_t)size, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), out.data(), size);
-    return out;
-}
-
-// 本地封面纹理缓存（按文件路径）。加载失败也会缓存，避免每帧重试。
-ImTextureID loadLocalCoverTexture(const std::string& path) {
-    static std::map<std::string, ImTextureID> cache;
-    static std::set<std::string> failed;
-    if (path.empty()) return (ImTextureID)0;
-    auto it = cache.find(path);
-    if (it != cache.end()) return it->second;
-    if (failed.count(path) != 0) return (ImTextureID)0;
-
-    std::FILE* file = _wfopen(utf8ToWide(path).c_str(), L"rb");
-    if (file == nullptr) {
-        failed.insert(path);
-        return (ImTextureID)0;
-    }
-    std::fseek(file, 0, SEEK_END);
-    const long size = std::ftell(file);
-    std::fseek(file, 0, SEEK_SET);
-    std::vector<unsigned char> bytes;
-    if (size > 0) {
-        bytes.resize((size_t)size);
-        const size_t read = std::fread(bytes.data(), 1, bytes.size(), file);
-        bytes.resize(read);
-    }
-    std::fclose(file);
-    if (bytes.empty()) {
-        failed.insert(path);
-        return (ImTextureID)0;
-    }
-
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-    unsigned char* pixels = stbi_load_from_memory(bytes.data(), (int)bytes.size(), &width, &height,
-                                                  &channels, 4);
-    if (pixels == nullptr) {
-        failed.insert(path);
-        return (ImTextureID)0;
-    }
-    GLuint texture = 0;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    stbi_image_free(pixels);
-    cache[path] = (ImTextureID)(intptr_t)texture;
-    return cache[path];
-}
-
-}  // namespace
-
 void CoverImage(const std::string& seed, ImVec2 pos, float size, float radius,
                 const std::string& coverUrl, const std::string& coverPath) {
-    (void)coverUrl;  // 网络封面 M4 再接
-    const ImTextureID texture = loadLocalCoverTexture(coverPath);
+    const ImTextureID texture = Ui::CoverTextureFor(coverUrl, coverPath);
     if (texture == 0) {
         CoverPlaceholder(seed, pos, size, radius);
         return;

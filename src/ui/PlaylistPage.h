@@ -18,6 +18,7 @@ struct PlaylistPageActions {
     bool requestDelete = false;
     bool pickCoverFromSong = false;
     bool pickCoverFromFile = false;
+    bool scanLocalMusic = false;
 
     // 多选
     bool toggleSelectMode = false;

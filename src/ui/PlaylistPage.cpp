@@ -100,6 +100,7 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         if (ImGui::Selectable("重命名歌单")) actions->requestRename = true;
         if (ImGui::Selectable("从歌单视频选封面")) actions->pickCoverFromSong = true;
         if (ImGui::Selectable("从本地图片选封面")) actions->pickCoverFromFile = true;
+        if (ImGui::Selectable("扫描本地音乐文件夹")) actions->scanLocalMusic = true;
         if (ImGui::Selectable("分享歌单")) actions->openMenu = true;
         ImGui::Separator();
         if (ImGui::Selectable("删除歌单")) actions->requestDelete = true;

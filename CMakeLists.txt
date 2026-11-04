@@ -52,6 +52,7 @@ set(APP_SOURCES
     third_party/qrcodegen/qrcodegen.cpp
     src/ui/Theme.cpp
     src/ui/Components.cpp
+    src/ui/ImageCache.cpp
     src/ui/TitleBar.cpp
     src/ui/WindowFrame.cpp
     src/ui/Sidebar.cpp

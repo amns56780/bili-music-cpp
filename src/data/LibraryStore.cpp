@@ -474,24 +474,41 @@ int LibraryStore::deletePlaylistByTitle(const std::string& title, int64_t except
 }
 
 int LibraryStore::addSongs(int64_t playlistId, const std::vector<StoredSong>& incoming) {
+    // 在线曲目按 (bvid, cid) 去重；本地音乐（没有 bvid）按 localPath 去重
     std::vector<std::pair<std::string, int64_t>> existingKeys;
+    std::vector<std::string> existingLocalPaths;
     int maxOrder = -1;
     for (const StoredSong& song : songs_) {
         if (song.playlistId != playlistId) continue;
-        existingKeys.emplace_back(song.bvid, song.cid);
+        if (song.bvid.empty()) {
+            existingLocalPaths.push_back(song.localPath);
+        } else {
+            existingKeys.emplace_back(song.bvid, song.cid);
+        }
         if (song.sortOrder > maxOrder) maxOrder = song.sortOrder;
     }
     int order = maxOrder + 1;
     int added = 0;
     for (const StoredSong& song : incoming) {
-        const std::pair<std::string, int64_t> key(song.bvid, song.cid);
-        if (std::find(existingKeys.begin(), existingKeys.end(), key) != existingKeys.end()) continue;
+        if (song.bvid.empty()) {
+            if (song.localPath.empty()) continue;
+            if (std::find(existingLocalPaths.begin(), existingLocalPaths.end(), song.localPath) !=
+                existingLocalPaths.end()) {
+                continue;
+            }
+            existingLocalPaths.push_back(song.localPath);
+        } else {
+            const std::pair<std::string, int64_t> key(song.bvid, song.cid);
+            if (std::find(existingKeys.begin(), existingKeys.end(), key) != existingKeys.end()) {
+                continue;
+            }
+            existingKeys.push_back(key);
+        }
         StoredSong stored = song;
         stored.id = nextSongId_++;
         stored.playlistId = playlistId;
         stored.sortOrder = order++;
         songs_.push_back(std::move(stored));
-        existingKeys.push_back(key);
         ++added;
     }
     if (added > 0) {
@@ -535,6 +552,17 @@ int LibraryStore::moveSongsTo(int64_t targetPlaylistId, const std::vector<int64_
     const int added = copySongsTo(targetPlaylistId, songIds);
     removeSongs(songIds);
     return added;
+}
+
+
+bool LibraryStore::setSongLocalPath(int64_t songId, const std::string& localPath) {
+    for (StoredSong& song : songs_) {
+        if (song.id != songId) continue;
+        song.localPath = localPath;
+        save(nullptr);
+        return true;
+    }
+    return false;
 }
 
 bool LibraryStore::setPlaylistCover(int64_t id, const std::string& coverUrl,

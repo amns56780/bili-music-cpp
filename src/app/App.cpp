@@ -1,9 +1,13 @@
 #include "app/App.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <set>
 #include <thread>
 
 #ifndef NOMINMAX
@@ -17,7 +21,9 @@
 #include <GLFW/glfw3.h>
 
 #include <commdlg.h>
+#include <shlobj.h>
 
+#include "net/HttpClient.h"
 #include "ui/Components.h"
 #include "ui/PlayBar.h"
 #include "ui/PlaylistPage.h"
@@ -42,6 +48,79 @@ std::string wideToUtf8(const std::wstring& text) {
     WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), out.data(), size, nullptr,
                         nullptr);
     return out;
+}
+
+std::wstring chooseFolderW() {
+    BROWSEINFOW browse{};
+    browse.lpszTitle = L"选择本地音乐文件夹";
+    browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_EDITBOX;
+    LPITEMIDLIST item = SHBrowseForFolderW(&browse);
+    if (item == nullptr) return {};
+    wchar_t path[MAX_PATH] = {};
+    const bool ok = SHGetPathFromIDListW(item, path) != FALSE;
+    CoTaskMemFree(item);
+    if (!ok) return {};
+    return path;
+}
+
+std::string pathToUtf8(const std::filesystem::path& path) {
+    const std::u8string text = path.u8string();
+    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
+
+std::filesystem::path pathFromUtf8(const std::string& text) {
+    return std::filesystem::path(
+        std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
+}
+
+bool isAudioFileName(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    static const std::set<std::string> kAudioExtensions = {
+        ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".ape"};
+    return kAudioExtensions.count(extension) != 0;
+}
+
+std::vector<std::string> scanAudioFiles(const std::wstring& root) {
+    std::vector<std::string> files;
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator it(
+        std::filesystem::path(root), std::filesystem::directory_options::skip_permission_denied,
+        error);
+    const std::filesystem::recursive_directory_iterator end;
+    for (; it != end; it.increment(error)) {
+        if (error) {
+            error.clear();
+            continue;
+        }
+        if (!it->is_regular_file(error)) continue;
+        if (isAudioFileName(it->path())) files.push_back(pathToUtf8(it->path()));
+    }
+    return files;
+}
+
+std::string sanitizeFileName(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+        if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' ||
+            c == '>' || c == '|') {
+            out.push_back('_');
+        } else {
+            out.push_back(c);
+        }
+    }
+    if (out.size() > 80) out.resize(80);
+    return out;
+}
+
+bool writeBinaryFile(const std::wstring& path, const std::string& bytes) {
+    std::FILE* file = _wfopen(path.c_str(), L"wb");
+    if (file == nullptr) return false;
+    const size_t written = std::fwrite(bytes.data(), 1, bytes.size(), file);
+    std::fclose(file);
+    return written == bytes.size();
 }
 
 std::wstring chooseImageFileW() {
@@ -534,6 +613,14 @@ void App::pollAsync() {
             setStatus(event.progressText);
             continue;
         }
+        if (event.kind == AsyncEvent::Kind::DownloadDone) {
+            finishDownload(event);
+            continue;
+        }
+        if (event.kind == AsyncEvent::Kind::LocalScanDone) {
+            finishLocalScan(event);
+            continue;
+        }
         if (event.kind == AsyncEvent::Kind::ImportDone) {
             finishImport(event);
             continue;
@@ -608,6 +695,7 @@ void App::pollAsync() {
             setStatus("取流失败：" + event.message, true);
             continue;
         }
+        curStreamUrl_ = event.url;
         std::string error;
         if (!engine_.playUrl(event.url, kReferer, kUserAgent, &error)) {
             setStatus("播放失败：" + error, true);
@@ -947,6 +1035,126 @@ void App::chooseLocalCover() {
     }
 }
 
+
+void App::startDownloadCurrent() {
+    if (playingSongId_ < 0) {
+        setStatus("当前没有播放曲目", true);
+        return;
+    }
+    const StoredSong* song = findSong(playingSongId_);
+    if (song == nullptr) {
+        setStatus("找不到当前曲目", true);
+        return;
+    }
+    if (curStreamUrl_.empty()) {
+        setStatus(song->localPath.empty() ? "当前曲目没有可下载的在线地址" : "当前曲目已经是本地文件",
+                  true);
+        return;
+    }
+    const std::string title = song->title;
+    const std::string bvid = song->bvid;
+    const std::string url = curStreamUrl_;
+    const int64_t songId = playingSongId_;
+    setStatus("开始下载「" + title + "」…");
+    std::thread([this, title, bvid, url, songId]() {
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::DownloadDone;
+        event.songId = songId;
+        net::HttpResponse response;
+        std::string error;
+        const std::vector<std::pair<std::string, std::string>> headers = {
+            {"User-Agent", kUserAgent}, {"Referer", kReferer}};
+        if (!net::httpGet(url, headers, &response, &error) || response.body.empty()) {
+            event.ok = false;
+            event.message = error.empty() ? "下载内容为空" : error;
+            postAsync(std::move(event));
+            return;
+        }
+        std::wstring downloadsDir = LibraryStore::dataDir() + L"\\downloads";
+        CreateDirectoryW(downloadsDir.c_str(), nullptr);
+        std::string fileName = sanitizeFileName(title);
+        if (!bvid.empty()) fileName += " [" + bvid + "]";
+        fileName += ".m4s";
+        const std::wstring destination = downloadsDir + L"\\" + utf8ToWide(fileName);
+        if (!writeBinaryFile(destination, response.body)) {
+            event.ok = false;
+            event.message = "写入文件失败";
+        } else {
+            event.ok = true;
+            event.filePath = wideToUtf8(destination);
+            event.message = "下载完成";
+        }
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::scanLocalMusic() {
+    const std::wstring folder = chooseFolderW();
+    if (folder.empty()) {
+        setStatus("已取消扫描");
+        return;
+    }
+    setStatus("正在扫描本地音乐…");
+    std::thread([this, folder]() {
+        std::vector<std::string> files = scanAudioFiles(folder);
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::LocalScanDone;
+        event.ok = true;
+        event.localPaths = std::move(files);
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::finishLocalScan(const AsyncEvent& event) {
+    if (!event.ok) {
+        setStatus("扫描失败", true);
+        return;
+    }
+    int64_t playlistId = -1;
+    if (const StoredPlaylist* existing = store_.findBySource("LOCAL", "本地音乐")) {
+        playlistId = existing->id;
+    } else {
+        for (const StoredPlaylist& playlist : store_.playlists()) {
+            if (playlist.title == "本地音乐") {
+                playlistId = playlist.id;
+                break;
+            }
+        }
+    }
+    if (playlistId < 0) {
+        playlistId = store_.createPlaylist("本地音乐", "LOCAL", "本地音乐");
+    }
+    std::vector<StoredSong> songs;
+    songs.reserve(event.localPaths.size());
+    for (const std::string& path : event.localPaths) {
+        const std::filesystem::path filePath = pathFromUtf8(path);
+        StoredSong song;
+        song.title = pathToUtf8(filePath.stem());
+        song.artist = pathToUtf8(filePath.parent_path().filename());
+        song.localPath = path;
+        songs.push_back(std::move(song));
+    }
+    const int added = store_.addSongs(playlistId, songs);
+    selectPlaylist(playlistId);
+    setStatus("扫描完成：发现 " + std::to_string(event.localPaths.size()) + " 个音频文件，新增 " +
+              std::to_string(added) + " 首");
+    AppLog::info("App", "本地音乐扫描：文件 " + std::to_string(event.localPaths.size()) +
+                            "，新增 " + std::to_string(added));
+}
+
+void App::finishDownload(const AsyncEvent& event) {
+    if (!event.ok) {
+        setStatus("下载失败：" + event.message, true);
+        return;
+    }
+    if (store_.setSongLocalPath(event.songId, event.filePath)) {
+        setStatus("已下载到本地：" + event.filePath);
+        AppLog::info("App", "下载完成：" + event.filePath);
+    } else {
+        setStatus("已下载，但更新曲目路径失败", true);
+    }
+}
+
 void App::drawM3Dialogs() {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const ImVec2 center(display.x * 0.5f, display.y * 0.5f);
@@ -1213,7 +1421,7 @@ void App::drawM3Dialogs() {
                 for (const StoredSong* song : currentSongs()) {
                     if (song->id != pendingSongId) continue;
                     if (store_.setPlaylistCover(playlist->id, song->coverUrl, "")) {
-                        setStatus("已设置歌单封面（网络封面，M4 接图片缓存后显示）");
+                        setStatus("已设置歌单封面（来自歌单视频）");
                     }
                     break;
                 }
@@ -1520,11 +1728,20 @@ void App::draw() {
     }
     if (sidebarActions.openOutputDevice) setStatus("输出设备选择：M4 实现");
     if (sidebarActions.openLocalMusic) {
-        for (const StoredPlaylist& playlist : store_.playlists()) {
-            if (playlist.title == "本地音乐") {
-                selectPlaylist(playlist.id);
-                break;
+        const StoredPlaylist* local = store_.findBySource("LOCAL", "本地音乐");
+        if (local == nullptr) {
+            for (const StoredPlaylist& playlist : store_.playlists()) {
+                if (playlist.title == "本地音乐") {
+                    local = &playlist;
+                    break;
+                }
             }
+        }
+        if (local == nullptr) {
+            scanLocalMusic();
+        } else {
+            selectPlaylist(local->id);
+            setStatus("本地音乐：点右上角「…」→ 扫描本地音乐文件夹");
         }
     }
     if (sidebarActions.toggleImportMenu) importSourceDialogRequested_ = true;
@@ -1571,6 +1788,7 @@ void App::draw() {
     }
     if (pageActions.pickCoverFromSong) coverSongDialogRequested_ = true;
     if (pageActions.pickCoverFromFile) chooseLocalCover();
+    if (pageActions.scanLocalMusic) scanLocalMusic();
     if (pageActions.selectMode) setStatus("多选 / 复制 / 移动：M3 后半段实现");
     if (pageActions.requestRename) openRenamePlaylistDialog();
     if (pageActions.requestDelete) openDeletePlaylistDialog();
@@ -1601,7 +1819,7 @@ void App::draw() {
         engine_.setVolume(volume_);
     }
     if (playBarActions.qualitySelected) applyQualitySelection(playBarActions.qualityId);
-    if (playBarActions.download) setStatus("下载当前曲目：M3 实现");
+    if (playBarActions.download) startDownloadCurrent();
     if (playBarActions.openQueue) setStatus("播放队列：M4 实现");
     if (playBarActions.openSleepTimer) setStatus("定时关闭：M4 实现");
     if (playBarActions.openOutputDevice) setStatus("输出设备：M4 实现");

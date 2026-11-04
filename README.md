@@ -76,7 +76,12 @@
   - [x] 多选：勾选曲目、全选/清空、复制/移动到其它歌单（按 bvid+cid 去重）、批量删除
   - [x] 歌单封面：从歌单视频选封面（存 coverUrl）、从本地图片选封面（复制到 ~/.bilimusic/covers 并显示；
         引入 stb_image + GL 纹理，本地封面在歌单页大图与侧栏小图都能显示）
-  - [ ] M3 剩余：网络封面缓存（coverUrl 目前只存不显示）、下载/缓存、本地音乐扫描
+  - [x] 网络封面缓存：后台线程下载 B 站封面 → 主线程上传 GL 纹理（ImageCache），
+        歌单大图/侧栏小图/播放条封面都显示真实封面（失败自动回退渐变占位）
+  - [x] 下载当前曲目：当前在线播放的音频下载到 ~/.bilimusic/downloads/，并把 localPath 写回曲目
+  - [x] 本地音乐扫描：选文件夹递归扫描（mp3/flac/wav/m4a/aac/ogg/opus/wma/ape），
+        写入「本地音乐」歌单，本地曲目按 localPath 去重
+  - M3 全部完成 ✅
 - [x] 应用图标：与 Java 版同款 ic_launcher.png（glfwSetWindowIcon，多尺寸内嵌）
   和 exe 文件图标 bilimusic.ico（windres 资源）
 - [ ] M4：沉浸模式 / 封面 / 歌词 / 托盘 / 快捷键

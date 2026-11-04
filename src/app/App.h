@@ -25,7 +25,18 @@ public:
 
 private:
     struct AsyncEvent {
-        enum class Kind { Login, Play, BvPlay, QrGenerate, QrPoll, FavFolders, ImportProgress, ImportDone };
+        enum class Kind {
+            Login,
+            Play,
+            BvPlay,
+            QrGenerate,
+            QrPoll,
+            FavFolders,
+            ImportProgress,
+            ImportDone,
+            DownloadDone,
+            LocalScanDone
+        };
         Kind kind = Kind::Login;
         bool ok = false;
         long long songId = -1;
@@ -57,6 +68,8 @@ private:
         std::string sourceType;
         std::string sourceTitle;
         std::string desiredTitle;
+        std::string filePath;
+        std::vector<std::string> localPaths;
     };
 
     // 重名对话框后续动作
@@ -106,6 +119,10 @@ private:
     void finishImport(const AsyncEvent& event);
     void applyMultiAction(long long targetPlaylistId);
     void chooseLocalCover();
+    void startDownloadCurrent();
+    void scanLocalMusic();
+    void finishDownload(const AsyncEvent& event);
+    void finishLocalScan(const AsyncEvent& event);
 
     // 扫码登录
     enum class QrState { Idle, Loading, Waiting, Scanned, Expired, Success };
@@ -138,6 +155,7 @@ private:
     int qualityId_ = 0;
     bool currentIsOnline_ = false;
     std::string curBvid_;
+    std::string curStreamUrl_;
     long long curCid_ = 0;
     std::vector<std::string> curBackups_;
     int backupIndex_ = 0;

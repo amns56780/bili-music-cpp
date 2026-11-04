@@ -82,6 +82,7 @@ public:
     int copySongsTo(int64_t targetPlaylistId, const std::vector<int64_t>& songIds);
     int moveSongsTo(int64_t targetPlaylistId, const std::vector<int64_t>& songIds);
     bool setPlaylistCover(int64_t id, const std::string& coverUrl, const std::string& coverPath);
+    bool setSongLocalPath(int64_t songId, const std::string& localPath);
 
     static std::wstring dataDir();
     static std::wstring playlistsFile();
