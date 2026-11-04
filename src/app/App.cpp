@@ -130,6 +130,39 @@ bool writeBinaryFile(const std::wstring& path, const std::string& bytes) {
     return written == bytes.size();
 }
 
+// ---------------- 整首播放缓存 ----------------
+std::wstring utf8ToWide(const std::string& text);  // 定义在下方
+
+std::wstring playbackCacheDir() { return LibraryStore::dataDir() + L"\\cache"; }
+
+std::wstring playbackCacheFile(const std::string& bvid, int qualityKey) {
+    return playbackCacheDir() + L"\\" + utf8ToWide(bvid) + L"_" + std::to_wstring(qualityKey) +
+           L".m4s";
+}
+
+bool cacheFileUsable(const std::wstring& path) {
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size{};
+    const bool ok = GetFileSizeEx(handle, &size) != FALSE;
+    CloseHandle(handle);
+    return ok && size.QuadPart > 100 * 1024;
+}
+
+void removePlaybackCacheFiles() {
+    const std::wstring dir = playbackCacheDir();
+    WIN32_FIND_DATAW data{};
+    HANDLE handle = FindFirstFileW((dir + L"\\*").c_str(), &data);
+    if (handle == INVALID_HANDLE_VALUE) return;
+    do {
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
+        DeleteFileW((dir + L"\\" + data.cFileName).c_str());
+    } while (FindNextFileW(handle, &data) != FALSE);
+    FindClose(handle);
+}
+
 std::wstring chooseImageFileW() {
     wchar_t fileBuffer[32768] = {};
     OPENFILENAMEW dialog{};
@@ -305,6 +338,8 @@ void App::init(GLFWwindow* window) {
         }
         engine_.setNetworkCacheMs(networkCacheSeconds_ * 1000);
     }
+    sidebarCollapsed_ = bili_.getSetting("ui.sidebar_collapsed") == "1";
+    sidebarAnimWidth_ = sidebarCollapsed_ ? 0.0f : (float)Ui::Dimens::SidebarWidth;
 
     // 恢复音量与窗口位置/大小（Java 版同款 key）
     const std::string savedVolume = bili_.getSetting("desktop.volume");
@@ -427,6 +462,32 @@ void App::startOnlinePlayFor(long long songId, const std::string& bvid, long lon
     backupIndex_ = 0;
     stallRetries_ = 0;
     const int qualityIdSnapshot = qualityId_;
+
+    // 整首缓存命中 → 直接本地播放（seek 秒响应、不吃网络）
+    const std::wstring fullCache = playbackCacheFile(bvid, qualityIdSnapshot);
+    if (cacheFileUsable(fullCache)) {
+        std::string error;
+        if (engine_.playPath(fullCache, &error)) {
+            engine_.setVolume(volume_);
+            currentIsOnline_ = false;
+            pendingSongId_ = -1;
+            curStreamUrl_.clear();
+            curBackups_.clear();
+            lastStreamQualityId_ = qualityIdSnapshot;
+            stallWatchStartTick_ = 0;
+            backupIndex_ = 0;
+            if (pendingSeekMs_ >= 0.0) {
+                engine_.seekMs((int64_t)pendingSeekMs_);
+                pendingSeekMs_ = -1.0;
+            }
+            setStatus("正在播放（整首缓存）：" + title);
+            AppLog::info("App", "整首缓存命中，本地播放 bvid=" + bvid);
+            prefetchNextSongCache();
+            return;
+        }
+    }
+    // 后台把当前歌曲整首缓存下来（流播放同时进行，下载完自动切本地）
+    startCacheDownload(songId, bvid, cid, qualityIdSnapshot, title);
 
     // 命中已解析地址 → 立刻播放（暂停/切歌回来后无需再等 1s 取流）
     auto cached = streamCache_.find(songId);
@@ -588,6 +649,12 @@ void App::stepSong(int direction) {
         if (mode_ == 2) break;
     }
     setStatus("附近没有可播放的曲目", true);
+}
+
+void App::toggleSidebar() {
+    sidebarCollapsed_ = !sidebarCollapsed_;
+    bili_.setSetting("ui.sidebar_collapsed", sidebarCollapsed_ ? "1" : "0");
+    AppLog::info("App", sidebarCollapsed_ ? "折叠左侧栏" : "展开左侧栏");
 }
 
 void App::seekRelative(double seconds) {
@@ -1414,6 +1481,10 @@ void App::pollAsync() {
             setStatus(event.progressText);
             continue;
         }
+        if (event.kind == AsyncEvent::Kind::CacheReady) {
+            handleCacheReady(event);
+            continue;
+        }
         if (event.kind == AsyncEvent::Kind::Prefetched) {
             if (event.ok && event.songId >= 0) {
                 CachedStream entry;
@@ -1860,6 +1931,127 @@ void App::chooseLocalCover() {
     }
 }
 
+
+void App::startCacheDownload(long long songId, const std::string& bvid, long long cid,
+                            int qualitySnapshot, const std::string& title) {
+    if (songId < 0 || bvid.empty() || cid <= 0) return;
+    if (cachingSongs_.count(songId) != 0) return;
+    cachingSongs_.insert(songId);
+    AppLog::info("App", "开始整首缓存：" + title + " bvid=" + bvid);
+    std::thread([this, songId, bvid, cid, qualitySnapshot, title]() {
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::CacheReady;
+        event.songId = songId;
+        event.title = title;
+        event.bvid = bvid;
+        const bili::AudioStreamInfo stream = bili_.resolveAudio(bvid, cid, qualitySnapshot);
+        if (!stream.ok) {
+            event.ok = false;
+            event.message = stream.message;
+            postAsync(std::move(event));
+            return;
+        }
+        net::HttpResponse response;
+        std::string error;
+        const std::vector<std::pair<std::string, std::string>> headers = {
+            {"User-Agent", kUserAgent}, {"Referer", kReferer}};
+        if (!net::httpGet(stream.url, headers, &response, &error) ||
+            response.body.size() < 100 * 1024) {
+            event.ok = false;
+            event.message = error.empty() ? "缓存内容过小" : error;
+            postAsync(std::move(event));
+            return;
+        }
+        std::wstring directory = playbackCacheDir();
+        CreateDirectoryW(directory.c_str(), nullptr);
+        const std::wstring path = playbackCacheFile(bvid, qualitySnapshot);
+        if (!writeBinaryFile(path, response.body)) {
+            event.ok = false;
+            event.message = "写入缓存失败";
+            postAsync(std::move(event));
+            return;
+        }
+        event.ok = true;
+        event.filePath = wideToUtf8(path);
+        event.qualityId = stream.qualityId;
+        event.message = "ok";
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::prefetchNextSongCache() {
+    const std::vector<const StoredSong*> songs = currentSongs();
+    if (songs.size() <= 1) return;
+    int index = -1;
+    for (size_t i = 0; i < songs.size(); ++i) {
+        if (songs[i]->id == playingSongId_) {
+            index = (int)i;
+            break;
+        }
+    }
+    if (index < 0) return;
+    const int quality = qualityId_;
+    // 只预取“当前歌之后的第一首在线歌曲”，避免把整张歌单一次性下完
+    for (int step = 1; step < (int)songs.size(); ++step) {
+        const StoredSong* song = songs[(size_t)((index + step) % (int)songs.size())];
+        if (!song->localPath.empty()) continue;
+        if (song->bvid.empty() || song->cid <= 0) continue;
+        if (cacheFileUsable(playbackCacheFile(song->bvid, quality))) return;
+        if (cachingSongs_.count(song->id) != 0) return;
+        startCacheDownload(song->id, song->bvid, song->cid, quality, song->title);
+        return;
+    }
+}
+
+void App::handleCacheReady(const AsyncEvent& event) {
+    cachingSongs_.erase(event.songId);
+    if (!event.ok) {
+        AppLog::warn("App", "整首缓存失败：" + event.title + " " + event.message);
+        return;
+    }
+    AppLog::info("App", "整首缓存完成：" + event.title);
+    const std::wstring path = utf8ToWide(event.filePath);
+    // 当前正在流播的歌下载完 → 无缝换成本地文件，之后拖动进度条即时生效
+    if (event.songId == playingSongId_ && currentIsOnline_ && cacheFileUsable(path)) {
+        const bool wasPlaying = engine_.isPlaying();
+        const double position = positionMs_;
+        std::string error;
+        if (engine_.playPath(path, &error)) {
+            engine_.setVolume(volume_);
+            if (position > 0.5 && durationMs_ > 0.0) engine_.seekMs((int64_t)position);
+            if (!wasPlaying) engine_.pause();
+            currentIsOnline_ = false;
+            curStreamUrl_.clear();
+            curBackups_.clear();
+            stallWatchStartTick_ = 0;
+            seekPreviewMs_ = -1.0;
+            setStatus("已缓存整首《" + playingTitle_ + "》，切换本地播放（拖动进度条即时生效）");
+            AppLog::info("App", "切换到整首缓存播放 bvid=" + event.bvid);
+        }
+    }
+    // 只有「当前歌」或「当前歌的下一首」缓存完成时才继续预取一首，避免链式下载整张歌单
+    long long immediateNextId = -1;
+    const std::vector<const StoredSong*> songs = currentSongs();
+    for (size_t i = 0; i < songs.size(); ++i) {
+        if (songs[i]->id != playingSongId_) continue;
+        for (size_t j = i + 1; j < songs.size(); ++j) {
+            if (!songs[j]->localPath.empty() || songs[j]->bvid.empty() || songs[j]->cid <= 0) {
+                continue;
+            }
+            immediateNextId = songs[j]->id;
+            break;
+        }
+        break;
+    }
+    if (event.songId == playingSongId_ || event.songId == immediateNextId) prefetchNextSongCache();
+}
+
+void App::clearPlaybackCache() {
+    removePlaybackCacheFiles();
+    cachingSongs_.clear();
+    setStatus("已清除播放缓存");
+    AppLog::info("App", "已清除播放缓存");
+}
 
 void App::prefetchNextSong() {
     const std::vector<const StoredSong*> songs = currentSongs();
@@ -2337,6 +2529,10 @@ void App::drawM3Dialogs() {
             }
         }
         ImGui::Spacing();
+        if (ImGui::Button("清除播放缓存", ImVec2(140.0f, 32.0f))) {
+            clearPlaybackCache();
+        }
+        ImGui::SameLine();
         if (currentIsOnline_ && !curBvid_.empty() && curCid_ > 0) {
             if (ImGui::Button("重新加载当前曲目", ImVec2(160.0f, 32.0f))) {
                 pendingSeekMs_ = positionMs_;
@@ -2677,6 +2873,7 @@ void App::draw() {
     }
     // 窗口内快捷键：空格 = 播放/暂停，←/→（或 [ ]）= 切歌，F11 = 全屏
     if (!immersiveOpen_ && ImGui::IsKeyPressed(ImGuiKey_F11, false)) toggleImmersiveFullscreen();
+    if (!immersiveOpen_ && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) toggleSidebar();
     if (!immersiveOpen_ && !io.WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) togglePlayback();
         // [ / ] 切歌；← / → 快退/快进 3 秒
@@ -2688,7 +2885,15 @@ void App::draw() {
     const float titleBarHeight = Ui::Dimens::TitleBarHeight;
     const float playerHeight = Ui::Dimens::PlayerHeight;
     const float mainHeight = io.DisplaySize.y - titleBarHeight - playerHeight;
-    const float sidebarWidth = Ui::Dimens::SidebarWidth;
+    // 左侧栏折叠/展开的宽度动画（Ctrl+B 或标题栏左侧箭头）
+    const float targetSidebarWidth = sidebarCollapsed_ ? 0.0f : (float)Ui::Dimens::SidebarWidth;
+    const float sidebarSpeed = 1400.0f * io.DeltaTime;
+    if (sidebarAnimWidth_ < targetSidebarWidth) {
+        sidebarAnimWidth_ = std::min(targetSidebarWidth, sidebarAnimWidth_ + sidebarSpeed);
+    } else {
+        sidebarAnimWidth_ = std::max(targetSidebarWidth, sidebarAnimWidth_ - sidebarSpeed);
+    }
+    const float sidebarWidth = sidebarAnimWidth_;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -2706,19 +2911,21 @@ void App::draw() {
 
     const bool maximized = Ui::WindowIsMaximized(window_);
     ImGui::SetCursorPos(ImVec2(0, 0));
-    Ui::DrawTitleBar(window_, maximized);
+    if (Ui::DrawTitleBar(window_, maximized, sidebarCollapsed_)) toggleSidebar();
 
     // ---------------- 侧栏 ----------------
-    ImGui::SetCursorPos(ImVec2(0, titleBarHeight));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, Ui::Vec4(Ui::Colors::BgSide));
-    ImGui::BeginChild("##sidebar", ImVec2(sidebarWidth, mainHeight), ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollbar);
-    ImGui::PopStyleColor();
     Ui::SidebarActions sidebarActions;
-    Ui::DrawSidebar(store_, selectedPlaylistId_, mainHeight, status_, statusError_,
-                    (int)store_.playlists().size(), accountLoggedIn_, accountName_, accountId_,
-                    &sidebarActions);
-    ImGui::EndChild();
+    if (sidebarWidth > 1.0f) {
+        ImGui::SetCursorPos(ImVec2(0, titleBarHeight));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, Ui::Vec4(Ui::Colors::BgSide));
+        ImGui::BeginChild("##sidebar", ImVec2(sidebarWidth, mainHeight), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar);
+        ImGui::PopStyleColor();
+        Ui::DrawSidebar(store_, selectedPlaylistId_, mainHeight, status_, statusError_,
+                        (int)store_.playlists().size(), accountLoggedIn_, accountName_, accountId_,
+                        &sidebarActions);
+        ImGui::EndChild();
+    }
 
     // ---------------- 歌单页 ----------------
     ImGui::SetCursorPos(ImVec2(sidebarWidth, titleBarHeight));
@@ -2783,6 +2990,7 @@ void App::draw() {
         refreshOutputDevices();
         outputDeviceDialogRequested_ = true;
     }
+    if (sidebarActions.openCacheSettings) cacheSettingsDialogRequested_ = true;
     if (sidebarActions.openLocalMusic) {
         const StoredPlaylist* local = store_.findBySource("LOCAL", "本地音乐");
         if (local == nullptr) {

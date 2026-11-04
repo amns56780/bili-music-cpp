@@ -109,7 +109,7 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
 
     // ---------------- 歌单列表 ----------------
     const float listTop = 146.0f;
-    const float bottomArea = 124.0f;
+    const float bottomArea = 160.0f;  // 状态行 + 4 个底部入口
     const float statusArea = statusText.empty() ? 0.0f : 22.0f;
     const float listHeight = height - listTop - bottomArea - statusArea;
     if (listHeight > 40.0f) {
@@ -146,6 +146,9 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     actionY += 36.0f;
     ImGui::SetCursorPos(ImVec2(8.0f, actionY));
     if (SidebarAction("output_device", Icons::Headset, "输出设备")) actions->openOutputDevice = true;
+    actionY += 36.0f;
+    ImGui::SetCursorPos(ImVec2(8.0f, actionY));
+    if (SidebarAction("cache_settings", Icons::Tune, "播放缓存")) actions->openCacheSettings = true;
     actionY += 36.0f;
     ImGui::SetCursorPos(ImVec2(8.0f, actionY));
     if (SidebarAction("import_playlist", Icons::CloudDownload,

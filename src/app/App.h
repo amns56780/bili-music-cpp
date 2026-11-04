@@ -34,6 +34,7 @@ public:
     // 播放/进度乐观 UI 用（减少按钮与进度条的延迟感）
     void requestSeekPreview(double positionMs);
     void seekRelative(double seconds);
+    void toggleSidebar();
 
     // 关闭窗口（收进托盘）时也保存窗口位置/大小，下次启动沿用
     void saveWindowState();
@@ -51,7 +52,8 @@ private:
             ImportDone,
             DownloadDone,
             LocalScanDone,
-            Prefetched
+            Prefetched,
+            CacheReady
         };
         Kind kind = Kind::Login;
         bool ok = false;
@@ -150,6 +152,12 @@ private:
     void drawImmersive();
     void startDownloadCurrent();
     void prefetchNextSong();
+    // 整首缓存（激进缓存）：后台下载完整音频到 ~/.bilimusic/cache，播本地文件实现秒 seek
+    void startCacheDownload(long long songId, const std::string& bvid, long long cid,
+                            int qualitySnapshot, const std::string& title);
+    void prefetchNextSongCache();
+    void handleCacheReady(const AsyncEvent& event);
+    void clearPlaybackCache();
     void scanLocalMusic();
     void finishDownload(const AsyncEvent& event);
     void finishLocalScan(const AsyncEvent& event);
@@ -197,6 +205,7 @@ private:
         int64_t deadlineEpochSeconds = 0;
     };
     std::map<long long, CachedStream> streamCache_;
+    std::set<long long> cachingSongs_;  // 正在下载整首缓存的歌曲 id
     std::vector<std::string> curBackups_;
     int backupIndex_ = 0;
     int64_t curDeadlineEpoch_ = 0;
@@ -293,6 +302,10 @@ private:
     // 播放缓存范围（秒）：2/5/10/20，写入 audio.network_cache
     int networkCacheSeconds_ = 5;
     bool cacheSettingsDialogRequested_ = false;
+
+    // 左侧栏折叠（带宽度动画，状态持久化）
+    bool sidebarCollapsed_ = false;
+    float sidebarAnimWidth_ = 240.0f;
 
     bool immersiveOpen_ = false;
     bool immersiveClosing_ = false;

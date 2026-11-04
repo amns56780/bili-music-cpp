@@ -54,7 +54,7 @@ void drawWindowButtonGlyph(ImDrawList* draw, ImVec2 center, WindowButtonKind kin
 
 }  // namespace
 
-void DrawTitleBar(GLFWwindow* window, bool maximized) {
+bool DrawTitleBar(GLFWwindow* window, bool maximized, bool sidebarCollapsed) {
     const float height = Dimens::TitleBarHeight;
     const float buttonWidth = Dimens::TitleBarButtonWidth;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -62,13 +62,39 @@ void DrawTitleBar(GLFWwindow* window, bool maximized) {
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height), Colors::BgTitleBar);
 
+    // 最左侧：折叠/展开侧栏按钮
+    bool sidebarToggleClicked = false;
+    {
+        const float btnX = origin.x + 6.0f;
+        const float btnW = 28.0f;
+        ImGui::SetCursorScreenPos(ImVec2(btnX, origin.y));
+        ImGui::PushID("sidebar_toggle");
+        const bool pressed = ImGui::InvisibleButton("##toggle", ImVec2(btnW, height));
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (hovered) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            draw->AddRectFilled(ImVec2(btnX, origin.y + 4.0f),
+                                ImVec2(btnX + btnW, origin.y + height - 4.0f),
+                                Colors::WindowBtnHover, 6.0f);
+        }
+        const std::string glyph =
+            Icons::Utf8(sidebarCollapsed ? Icons::ChevronRight : Icons::ChevronLeft);
+        draw->AddText(GetFonts().body, 18.0f,
+                      ImVec2(btnX + btnW * 0.5f - 18.0f * 0.5f,
+                             origin.y + height * 0.5f - 18.0f * 0.325f),
+                      hovered ? Colors::White : Colors::WindowBtnIcon, glyph.c_str());
+        if (pressed) sidebarToggleClicked = true;
+    }
+
     // 左边：小图标 + 标题（和 Java 版一样用 label 字号、次要文字色）
+    const float titleX = 40.0f;
     const std::string note = Icons::Utf8(Icons::MusicNote);
     draw->AddText(GetFonts().body, 18.0f,
-                  ImVec2(origin.x + 12.0f, origin.y + height * 0.5f - 18.0f * 0.325f), Colors::Text2,
+                  ImVec2(origin.x + titleX, origin.y + height * 0.5f - 18.0f * 0.325f), Colors::Text2,
                   note.c_str());
     draw->AddText(GetFonts().small, 15.0f,
-                  ImVec2(origin.x + 12.0f + 18.0f + 8.0f, origin.y + (height - 15.0f) / 2),
+                  ImVec2(origin.x + titleX + 18.0f + 8.0f, origin.y + (height - 15.0f) / 2),
                   Colors::Text3, "bilimusic");
 
     // 拖动和双击最大化交给系统（WM_NCHITTEST 返回 HTCAPTION，见 WindowFrame.cpp）：
@@ -109,6 +135,7 @@ void DrawTitleBar(GLFWwindow* window, bool maximized) {
 
     // 恢复到内容游标（标题栏下面的区域从 y = height 开始）
     ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height));
+    return sidebarToggleClicked;
 }
 
 }  // namespace Ui

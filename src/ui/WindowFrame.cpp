@@ -48,6 +48,8 @@ LRESULT CALLBACK WindowFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 if (top) return HTTOP;
                 if (bottom) return HTBOTTOM;
             }
+            // 标题栏最左侧是「折叠/展开侧栏」按钮，需要接收点击
+            if (pt.y < kTitleBarHeight && pt.x >= 0 && pt.x < 36) return HTCLIENT;
             // 标题栏（右侧三个窗口按钮除外）交给系统做原生拖动/双击最大化
             if (pt.y < kTitleBarHeight && pt.x < rc.right - kTitleBarButtonsWidth) {
                 return HTCAPTION;

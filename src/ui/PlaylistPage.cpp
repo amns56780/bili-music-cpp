@@ -89,27 +89,27 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     const float buttonY = coverBottom - 34.0f;
     ImGui::SetCursorPos(ImVec2(infoX, buttonY));
     if (PrimaryButton("play_all", "播放全部", Icons::PlayArrow)) actions->playAll = true;
-    ImGui::SetCursorPos(ImVec2(infoX + 110.0f, buttonY));
+    ImGui::SetCursorPos(ImVec2(infoX + 122.0f, buttonY));
     if (GhostButton("select_mode", "多选")) actions->toggleSelectMode = true;
     ImGui::SetCursorPos(ImVec2(infoX + 196.0f, buttonY));
     if (IconButton("page_more", Icons::MoreHoriz, 34.0f, 20.0f, Colors::Text2, false, true,
                    "更多操作")) {
         ImGui::OpenPopup("page_menu");
     }
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 10.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f, 8.0f));
     if (ImGui::BeginPopup("page_menu")) {
         if (ImGui::Selectable("重命名歌单")) actions->requestRename = true;
         if (ImGui::Selectable("从歌单视频选封面")) actions->pickCoverFromSong = true;
         if (ImGui::Selectable("从本地图片选封面")) actions->pickCoverFromFile = true;
         if (ImGui::Selectable("扫描本地音乐文件夹")) actions->scanLocalMusic = true;
-        if (ImGui::Selectable("播放缓存设置…")) actions->requestCacheSettings = true;
         if (ImGui::Selectable("分享歌单")) actions->openMenu = true;
         ImGui::Separator();
         if (ImGui::Selectable("删除歌单")) actions->requestDelete = true;
         ImGui::EndPopup();
     }
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(3);
 
     // ---------------- 多选工具条 ----------------
     const float rowX = Dimens::ContentPaddingX - 12.0f;
