@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ui/Components.h"
+#include "ui/ImageCache.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -58,8 +59,23 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
             ImGui::EndTooltip();
         }
     }
-    CoverImage(data.title, abs(18.0f, (height - Dimens::CoverPlayer) / 2.0f),
-               Dimens::CoverPlayer, 9.0f, data.coverUrl, data.coverPath);
+    if (!data.hasMedia) {
+        // 空闲时显示 BM 应用图标（对齐 Java 版默认封面）
+        const ImTextureID appIcon = Ui::AppIconTexture();
+        if (appIcon != 0) {
+            const ImVec2 iconMin = abs(18.0f, (height - Dimens::CoverPlayer) / 2.0f);
+            ImGui::GetWindowDrawList()->AddImageRounded(
+                appIcon, iconMin,
+                ImVec2(iconMin.x + Dimens::CoverPlayer, iconMin.y + Dimens::CoverPlayer),
+                ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), 9.0f);
+        } else {
+            CoverImage(data.title, abs(18.0f, (height - Dimens::CoverPlayer) / 2.0f),
+                       Dimens::CoverPlayer, 9.0f, data.coverUrl, data.coverPath);
+        }
+    } else {
+        CoverImage(data.title, abs(18.0f, (height - Dimens::CoverPlayer) / 2.0f),
+                   Dimens::CoverPlayer, 9.0f, data.coverUrl, data.coverPath);
+    }
     TextEllipsis(data.title, 236.0f, GetFonts().body, Colors::Text, abs(80.0f, 20.0f));
     TextEllipsis(data.artist, 236.0f, GetFonts().small, Colors::Text3, abs(80.0f, 39.0f));
     // 与右侧音量条同一水平中心线（用户反馈：原来偏高，下移与音量条齐平）

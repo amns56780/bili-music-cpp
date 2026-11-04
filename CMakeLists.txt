@@ -43,6 +43,7 @@ set(APP_SOURCES
     src/app/App.cpp
     src/media/VlcEngine.cpp
     src/media/AppVolume.cpp
+    src/media/AudioSpectrum.cpp
     src/data/LibraryStore.cpp
     src/util/AppLog.cpp
     src/util/Md5.cpp

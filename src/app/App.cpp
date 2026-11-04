@@ -1,6 +1,7 @@
 #include "app/App.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -21,9 +22,13 @@
 
 #include <GLFW/glfw3.h>
 
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+
 #include <commdlg.h>
 #include <shlobj.h>
 
+#include "media/AudioSpectrum.h"
 #include "net/HttpClient.h"
 #include "ui/Components.h"
 #include "ui/ImageCache.h"
@@ -289,6 +294,25 @@ void App::init(GLFWwindow* window) {
     selectedOutputDeviceId_ = bili_.getSetting("audio.outputDevice");
     if (!selectedOutputDeviceId_.empty()) engine_.setAudioOutputDevice(selectedOutputDeviceId_);
 
+    // 恢复音量与窗口位置/大小（Java 版同款 key）
+    const std::string savedVolume = bili_.getSetting("desktop.volume");
+    if (!savedVolume.empty()) {
+        try {
+            volume_ = std::max(0, std::min(100, std::stoi(savedVolume)));
+        } catch (const std::exception&) {
+        }
+    }
+    engine_.setVolume(volume_);  // 让引擎/播放条都从保存值开始
+    if (window_ != nullptr) {
+        const std::string geometry = bili_.getSetting("window.geometry");
+        int x = 0, y = 0, w = 0, h = 0;
+        if (std::sscanf(geometry.c_str(), "%d,%d,%d,%d", &x, &y, &w, &h) == 4 && w >= 900 &&
+            h >= 600 && x > -30000 && y > -30000) {
+            glfwSetWindowSize(window_, w, h);
+            glfwSetWindowPos(window_, x, y);
+        }
+    }
+
     std::string loadError;
     if (!store_.load(&loadError)) {
         setStatus(loadError, true);
@@ -304,7 +328,33 @@ void App::init(GLFWwindow* window) {
     }
 }
 
-void App::shutdown() { engine_.shutdown(); }
+void App::saveWindowState() {
+    if (window_ == nullptr || immersiveFullscreen_) return;
+    // 用 Win32 的真实窗口矩形：GLFW 的缓存可能在外部 SetWindowPos/拖动后还没刷新
+    int x = 0, y = 0, w = 0, h = 0;
+    HWND hwnd = glfwGetWin32Window(window_);
+    RECT rect{};
+    if (hwnd != nullptr && GetWindowRect(hwnd, &rect) != FALSE) {
+        x = rect.left;
+        y = rect.top;
+        w = rect.right - rect.left;
+        h = rect.bottom - rect.top;
+    } else {
+        glfwGetWindowPos(window_, &x, &y);
+        glfwGetWindowSize(window_, &w, &h);
+    }
+    if (x > -30000 && y > -30000 && w > 300 && h > 300) {
+        bili_.setSetting("window.geometry", std::to_string(x) + "," + std::to_string(y) + "," +
+                                               std::to_string(w) + "," + std::to_string(h));
+    }
+    bili_.setSetting("desktop.volume", std::to_string(volume_));
+}
+
+void App::shutdown() {
+    media::AudioSpectrum::stop();
+    saveWindowState();
+    engine_.shutdown();
+}
 
 void App::setStatus(const std::string& text, bool isError) {
     status_ = text;
@@ -528,13 +578,31 @@ void App::stepSong(int direction) {
     setStatus("附近没有可播放的曲目", true);
 }
 
+void App::requestSeekPreview(double positionMs) {
+    seekPreviewMs_ = positionMs;
+    seekPreviewUntil_ = GetTickCount64() + 1500;
+    positionMs_ = positionMs;
+}
+
 void App::syncPlaybackState() {
     hasMedia_ = engine_.ready() && engine_.lengthMs() > 0;
     positionMs_ = engine_.ready() ? (double)engine_.positionMs() : 0.0;
     durationMs_ = engine_.ready() ? (double)engine_.lengthMs() : 0.0;
-    playing_ = engine_.ready() && engine_.isPlaying();
+    const bool enginePlaying = engine_.ready() && engine_.isPlaying();
+    if (GetTickCount64() >= playbackOverrideUntil_) {
+        playing_ = enginePlaying;
+    }
     engine_.pumpVolume();
     volume_ = engine_.volume();
+    // seek 预览：松手后用目标位置显示，等引擎位置追上（或超时）再切回真实位置
+    if (seekPreviewMs_ >= 0.0) {
+        const bool caughtUp = std::abs(positionMs_ - seekPreviewMs_) < 1500.0;
+        if (caughtUp || GetTickCount64() > seekPreviewUntil_) {
+            seekPreviewMs_ = -1.0;
+        } else {
+            positionMs_ = seekPreviewMs_;
+        }
+    }
     checkPlaybackStall();
 }
 
@@ -610,6 +678,7 @@ void App::openImmersive() {
     immersiveVolumeOpen_ = false;
     immersiveBgMenuOpen_ = false;
     immersiveModeTip_.clear();
+    media::AudioSpectrum::start();  // 沉浸模式期间才采集频谱（对齐 Java 版）
     AppLog::info("App", "打开沉浸模式（自下而上滑入）");
 }
 
@@ -668,6 +737,7 @@ void App::drawImmersive() {
     if (anim <= 0.0f) {
         immersiveOpen_ = false;
         immersiveClosing_ = false;
+        media::AudioSpectrum::stop();
         return;
     }
     const float width = io.DisplaySize.x;
@@ -782,19 +852,21 @@ void App::drawImmersive() {
                               48);
         const ImU32 white = fade(IM_COL32(255, 255, 255, 255));
         if (playing_) {
-            const float barWidth = size * 0.087f;
+            // 两条竖杠间隙收窄（用户反馈太宽）
+            const float barWidth = size * 0.095f;
             const float barHeight = size * 0.31f;
-            const float gap = size * 0.10f;
+            const float gap = size * 0.052f;
             draw->AddRectFilled(ImVec2(centerX - gap - barWidth, centerY - barHeight * 0.5f),
                                 ImVec2(centerX - gap, centerY + barHeight * 0.5f), white, 1.0f);
             draw->AddRectFilled(ImVec2(centerX + gap, centerY - barHeight * 0.5f),
                                 ImVec2(centerX + gap + barWidth, centerY + barHeight * 0.5f), white,
                                 1.0f);
         } else {
+            // 三角形重心居中（用户反馈偏右，apex 往左收一点）
             const float half = size * 0.155f;
             const ImVec2 a(centerX - half * 0.6f + size * 0.025f, centerY - half);
             const ImVec2 b(centerX - half * 0.6f + size * 0.025f, centerY + half);
-            const ImVec2 c(centerX + half * 1.1f, centerY);
+            const ImVec2 c(centerX + half * 0.85f, centerY);
             draw->AddTriangleFilled(a, b, c, white);
         }
         return clicked;
@@ -1061,7 +1133,11 @@ void App::drawImmersive() {
     }
     if (seekFinished) {
         immersiveSeeking = false;
-        if (durationMs_ > 0.0) engine_.seekMs((int64_t)(sliderValue * durationMs_));
+        if (durationMs_ > 0.0) {
+            const double target = sliderValue * durationMs_;
+            engine_.seekMs((int64_t)target);
+            requestSeekPreview(target);
+        }
     }
     auto formatMs = [](double ms) {
         const int64_t total = (int64_t)((ms < 0.0 ? 0.0 : ms) / 1000.0);
@@ -1117,22 +1193,30 @@ void App::drawImmersive() {
 
     // ---------------- 底部律动线条 ----------------
     if (immersiveShowWave_) {
+        // 真实频谱：WASAPI loopback + FFT（media::AudioSpectrum）
         static float waveLevel = 0.0f;
         const float targetLevel = playing_ ? 1.0f : 0.0f;
-        waveLevel += (targetLevel - waveLevel) * std::min(1.0f, delta * 3.5f);
+        const float levelStep = std::min(1.0f, delta / 0.7f);  // ~700ms 过渡
+        waveLevel += (targetLevel - waveLevel) * levelStep;
+        const std::array<float, media::AudioSpectrum::kBands> spectrum =
+            media::AudioSpectrum::bands();
         const int bars = 56;
+        const int bandCount = media::AudioSpectrum::kBands;
         const float gap = px(3);
         const float areaWidth = std::min(px(700), width * 0.7f);
         const float barWidth = (areaWidth - gap * (bars - 1)) / (float)bars;
         const float left = (width - areaWidth) * 0.5f;
         const float waveHeight = px(90);
         const float waveBottom = slideOffset + height - px(26);
-        const double timeSeconds = ImGui::GetTime();
         for (int i = 0; i < bars; ++i) {
-            const float wobble =
-                0.35f + 0.65f * (0.5f + 0.5f * std::sin((float)timeSeconds * (2.2f + (i % 7) * 0.13f) +
-                                                       i * 0.7f));
-            const float amplitude = 0.06f + 0.94f * waveLevel * wobble;
+            const float srcPos = (float)i / (float)(bars - 1) * (float)(bandCount - 1);
+            const int i0 = std::max(0, std::min(bandCount - 1, (int)srcPos));
+            const int i1 = std::min(bandCount - 1, i0 + 1);
+            const float frac = srcPos - (float)i0;
+            const float energy =
+                std::clamp(spectrum[(size_t)i0] * (1.0f - frac) + spectrum[(size_t)i1] * frac, 0.0f,
+                           1.0f);
+            const float amplitude = 0.06f + 0.94f * energy * waveLevel;
             const float barH = std::max(px(1), waveHeight * amplitude);
             const float x = left + i * (barWidth + gap);
             draw->AddRectFilled(ImVec2(x, waveBottom - barH), ImVec2(x + barWidth, waveBottom),
@@ -1173,6 +1257,9 @@ void App::togglePlayback() {
     }
     const bool wasPlaying = engine_.isPlaying();
     engine_.togglePause();
+    // 乐观 UI：立刻翻转按钮状态，避免等引擎状态同步造成的延迟感
+    playing_ = !wasPlaying;
+    playbackOverrideUntil_ = GetTickCount64() + 450;
     if (wasPlaying) {
         // 暂停：停掉卡顿看门狗，避免暂停期间误判重取流
         stallWatchStartTick_ = 0;
@@ -2709,16 +2796,23 @@ void App::draw() {
         mode_ = (mode_ + 1) % 4;
         setStatus("播放模式：" + formatModeName(mode_));
     }
-    if (playBarActions.seekFinished) engine_.seekMs((int64_t)playBarActions.seekMs);
+    if (playBarActions.seekFinished) {
+        engine_.seekMs((int64_t)playBarActions.seekMs);
+        requestSeekPreview(playBarActions.seekMs);
+    }
     if (playBarActions.volumeWheelDelta != 0.0f) {
         // 滚轮微调：每格 1%
         int next = volume_ + (int)std::lround(playBarActions.volumeWheelDelta * 1.0f);
         volume_ = next < 0 ? 0 : (next > 100 ? 100 : next);
         engine_.setVolume(volume_);
+        bili_.setSetting("desktop.volume", std::to_string(volume_));
     }
     if (playBarActions.volumeChanged || playBarActions.volumeFinished) {
         volume_ = playBarActions.volume;
         engine_.setVolume(volume_);
+        if (playBarActions.volumeFinished) {
+            bili_.setSetting("desktop.volume", std::to_string(volume_));
+        }
     }
     if (playBarActions.qualitySelected) applyQualitySelection(playBarActions.qualityId);
     if (playBarActions.download) startDownloadCurrent();

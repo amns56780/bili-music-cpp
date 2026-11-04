@@ -15,6 +15,9 @@ ImTextureID CoverTextureFor(const std::string& coverUrl, const std::string& cove
 // 查询纹理原始像素尺寸（用于按 Java 版 ContentScale.Crop 居中裁切）
 bool CoverTextureSize(ImTextureID texture, int* width, int* height);
 
+// BM 应用图标纹理（底部播放条空闲时显示）
+ImTextureID AppIconTexture();
+
 // 沉浸模式背景：桌面壁纸 / 指定图片，做高斯近似模糊后返回纹理（失败返回 0）
 ImTextureID BlurredWallpaperTexture();
 ImTextureID BlurredImageTexture(const std::string& path);

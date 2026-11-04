@@ -31,6 +31,12 @@ public:
     // 防熄屏用：当前是否在出声
     bool playbackActive() const { return playing_ && hasMedia_; }
 
+    // 播放/进度乐观 UI 用（减少按钮与进度条的延迟感）
+    void requestSeekPreview(double positionMs);
+
+    // 关闭窗口（收进托盘）时也保存窗口位置/大小，下次启动沿用
+    void saveWindowState();
+
 private:
     struct AsyncEvent {
         enum class Kind {
@@ -278,6 +284,11 @@ private:
     std::vector<std::pair<std::string, std::string>> outputDevices_;  // id, 名称
     std::string selectedOutputDeviceId_;
     // 沉浸模式（对齐 Java Immersive.kt：点击播放条封面自下而上滑入，背景默认桌面壁纸模糊）
+    // 乐观 UI：暂停/播放后短暂不信任引擎状态；seek 后先用目标位置显示，引擎追上再切回
+    uint64_t playbackOverrideUntil_ = 0;
+    double seekPreviewMs_ = -1.0;
+    uint64_t seekPreviewUntil_ = 0;
+
     bool immersiveOpen_ = false;
     bool immersiveClosing_ = false;
     float immersiveAnim_ = 0.0f;

@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "net/HttpClient.h"
+#include "ui/AppIcon.h"
 #include "util/AppLog.h"
 
 namespace Ui {
@@ -167,6 +168,25 @@ ImTextureID CoverTextureFor(const std::string& coverUrl, const std::string& cove
     gEntries[coverUrl] = std::move(entry);
     startDownload(coverUrl);
     return 0;
+}
+
+ImTextureID AppIconTexture() {
+    static ImTextureID cached = 0;
+    static bool tried = false;
+    if (tried) return cached;
+    tried = true;
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    const int size = Ui::AppIcon::kImages[0].width;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 Ui::AppIcon::kImages[0].pixels);
+    cached = (ImTextureID)(intptr_t)texture;
+    return cached;
 }
 
 bool CoverTextureSize(ImTextureID texture, int* width, int* height) {

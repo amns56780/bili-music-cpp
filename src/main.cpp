@@ -264,6 +264,7 @@ int main(int argc, char** argv) {
             if (!exitRequested && tray.active()) {
                 glfwSetWindowShouldClose(window, GLFW_FALSE);
                 ShowWindow(nativeWindow, SW_HIDE);
+                app.saveWindowState();
                 continue;
             }
             break;
