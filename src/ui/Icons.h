@@ -42,6 +42,7 @@ inline constexpr uint32_t Share = 0xE80D;
 inline constexpr uint32_t CheckBox = 0xE834;
 inline constexpr uint32_t PlaylistAdd = 0xE03B;
 inline constexpr uint32_t Bedtime = 0xEF44;
+inline constexpr uint32_t Favorite = 0xE87D;  // 心形（收藏夹里的 ♥️ 用它显示）
 inline constexpr uint32_t GraphicEq = 0xE1B8;
 inline constexpr uint32_t BlurOn = 0xE3A5;
 inline constexpr uint32_t Alarm = 0xE855;

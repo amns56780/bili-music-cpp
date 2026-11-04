@@ -570,10 +570,12 @@ void App::checkSleepTimer() {
 }
 
 void App::refreshOutputDevices() {
-    outputDevices_.clear();
+    std::vector<std::pair<std::string, std::string>> devices;
     for (const VlcEngine::AudioDevice& device : engine_.audioOutputDevices()) {
-        outputDevices_.emplace_back(device.id, device.name);
+        devices.emplace_back(device.id, device.name);
     }
+    if (devices.empty() && !outputDevices_.empty()) return;  // 还没起播时保留上次枚举结果
+    outputDevices_ = std::move(devices);
     AppLog::info("App", "音频输出设备：" + std::to_string(outputDevices_.size()) + " 个");
 }
 
@@ -591,6 +593,7 @@ void App::applyOutputDevice(const std::string& id) {
 }
 
 void App::toggleImmersive() {
+    AppLog::info("App", "沉浸模式切换请求");
     if (window_ == nullptr) return;
     if (!immersive_) {
         glfwGetWindowPos(window_, &savedWindowX_, &savedWindowY_);
@@ -653,10 +656,11 @@ void App::drawImmersive() {
     const float textY = coverY + coverSize + px(26.0f);
     Ui::TextEllipsis(title, px(760.0f), Ui::GetFonts().xl, Ui::Colors::Text,
                      ImVec2(centerX - px(380.0f), textY));
+    const std::string artistShown = Ui::DisplayText(artist);
     draw->AddText(Ui::GetFonts().body, px(18.0f),
-                  ImVec2(centerX - Ui::MeasureText(Ui::GetFonts().body, 18.0f, artist) * 0.5f,
+                  ImVec2(centerX - Ui::MeasureText(Ui::GetFonts().body, 18.0f, artistShown) * 0.5f,
                          textY + px(48.0f)),
-                  Ui::Colors::Text2, artist.c_str());
+                  Ui::Colors::Text2, artistShown.c_str());
 
     const float progressY = textY + px(96.0f);
     static bool immerseSeeking = false;
@@ -988,6 +992,7 @@ void App::pollAsync() {
         if (event.downgraded) message += "（请求的档位不可用，已自动降级）";
         setStatus(message);
         AppLog::info("App", message + " bvid=" + event.bvid);
+        if (outputDevices_.empty()) refreshOutputDevices();  // 起播后才能枚举 mmdevice 设备
         if (event.kind == AsyncEvent::Kind::Play) prefetchNextSong();
     }
 }
@@ -1335,6 +1340,8 @@ void App::prefetchNextSong() {
         const std::string title = song->title;
         const std::string artist = song->artist;
         std::thread([this, songId, bvid, cid, title, artist, qualityIdSnapshot]() {
+            // 延迟 4s 再预取：起播瞬间并发取流会抢占带宽，导致当前歌曲播 1s 后断流
+            std::this_thread::sleep_for(std::chrono::seconds(4));
             AsyncEvent event;
             event.kind = AsyncEvent::Kind::Prefetched;
             event.songId = songId;
@@ -2173,7 +2180,10 @@ void App::draw() {
         accountId_ = 0;
         setStatus("已退出登录");
     }
-    if (sidebarActions.openOutputDevice) setStatus("输出设备选择：M4 实现");
+    if (sidebarActions.openOutputDevice) {
+        refreshOutputDevices();
+        outputDeviceDialogRequested_ = true;
+    }
     if (sidebarActions.openLocalMusic) {
         const StoredPlaylist* local = store_.findBySource("LOCAL", "本地音乐");
         if (local == nullptr) {

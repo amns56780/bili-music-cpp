@@ -46,6 +46,18 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     ImDrawList* draw = ImGui::GetWindowDrawList();
 
     // ---------------- 左：当前曲目 ----------------
+    // 点击播放条封面进入沉浸模式
+    ImGui::SetCursorPos(ImVec2(18.0f, (height - Dimens::CoverPlayer) / 2.0f));
+    if (ImGui::InvisibleButton("##cover_immersive", ImVec2(Dimens::CoverPlayer, Dimens::CoverPlayer))) {
+        actions->toggleImmersive = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (ImGui::BeginTooltip()) {
+            ImGui::TextUnformatted("点击进入沉浸模式");
+            ImGui::EndTooltip();
+        }
+    }
     CoverImage(data.title, abs(18.0f, (height - Dimens::CoverPlayer) / 2.0f),
                Dimens::CoverPlayer, 9.0f, data.coverUrl, data.coverPath);
     TextEllipsis(data.title, 236.0f, GetFonts().body, Colors::Text, abs(80.0f, 20.0f));
@@ -142,6 +154,8 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         ImGui::PushStyleColor(ImGuiCol_PopupBg, Ui::Vec4(Ui::Colors::Dialog));
         ImGui::PushStyleColor(ImGuiCol_Text, Ui::Vec4(Ui::Colors::Text));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 10.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
         if (ImGui::BeginPopup("quality_menu")) {
             struct QualityOption {
                 int id;
@@ -161,7 +175,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
             }
             ImGui::EndPopup();
         }
-        ImGui::PopStyleVar();
+        ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(2);
         ImGui::PopID();
     }

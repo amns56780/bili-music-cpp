@@ -86,6 +86,29 @@ bool isInvisibleModifier(uint32_t codepoint) {
 
 // ImGui 用的字体（微软雅黑）没有 emoji 字形，直接渲染会是一串「?」。
 // 显示层把 emoji 换成一个音符，数据本身不动（Java 版仍能看到原始 emoji）。
+// 部分常见 emoji 用 Material Icons 里语义相近的图标显示（不再一律压成音符）
+uint32_t iconForEmoji(uint32_t codepoint) {
+    switch (codepoint) {
+        case 0x2764:  // ❤
+        case 0x2665:  // ♥
+        case 0x1F49B:
+        case 0x1F499:
+        case 0x1F49A:
+        case 0x1F49C:
+        case 0x1F5A4:
+        case 0x1F9E1:
+            return Icons::Favorite;
+        case 0x1F3B5:  // 🎵
+        case 0x1F3B6:  // 🎶
+        case 0x1F3BC:  // 🎼
+        case 0x266A:   // ♪
+        case 0x266B:   // ♫
+            return Icons::MusicNote;
+        default:
+            return 0;
+    }
+}
+
 std::string sanitizeForDisplay(const std::string& text) {
     std::string out;
     out.reserve(text.size());
@@ -96,8 +119,9 @@ std::string sanitizeForDisplay(const std::string& text) {
         if (isInvisibleModifier(codepoint)) {
             // 跳过
         } else if (isEmojiOrSymbol(codepoint)) {
-            // 用 Material Icons 的音符字形（图标字体合并进了正文/标题字体，肯定有字形）
-            out += Icons::Utf8(Icons::MusicNote);
+            // 用 Material Icons 字形（图标字体合并进了正文/标题字体，肯定有字形）
+            const uint32_t icon = iconForEmoji(codepoint);
+            out += Icons::Utf8(icon != 0 ? icon : Icons::MusicNote);
         } else {
             out.append(text, offset, length);
         }
@@ -112,7 +136,8 @@ std::string firstUtf8Char(const std::string& text) {
     size_t length = 0;
     const uint32_t codepoint = decodeUtf8(text, 0, &length);
     if (isEmojiOrSymbol(codepoint) || isInvisibleModifier(codepoint)) {
-        return Icons::Utf8(Icons::MusicNote);
+        const uint32_t icon = iconForEmoji(codepoint);
+        return Icons::Utf8(icon != 0 ? icon : Icons::MusicNote);
     }
     return text.substr(0, length);
 }

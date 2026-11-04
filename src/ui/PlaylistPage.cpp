@@ -90,12 +90,14 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     ImGui::SetCursorPos(ImVec2(infoX, buttonY));
     if (PrimaryButton("play_all", "播放全部", Icons::PlayArrow)) actions->playAll = true;
     ImGui::SetCursorPos(ImVec2(infoX + 110.0f, buttonY));
-    if (GhostButton("select_mode", "多选", Icons::CheckBox)) actions->toggleSelectMode = true;
+    if (GhostButton("select_mode", "多选")) actions->toggleSelectMode = true;
     ImGui::SetCursorPos(ImVec2(infoX + 196.0f, buttonY));
     if (IconButton("page_more", Icons::MoreHoriz, 34.0f, 20.0f, Colors::Text2, false, true,
                    "更多操作")) {
         ImGui::OpenPopup("page_menu");
     }
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
     if (ImGui::BeginPopup("page_menu")) {
         if (ImGui::Selectable("重命名歌单")) actions->requestRename = true;
         if (ImGui::Selectable("从歌单视频选封面")) actions->pickCoverFromSong = true;
@@ -106,6 +108,7 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         if (ImGui::Selectable("删除歌单")) actions->requestDelete = true;
         ImGui::EndPopup();
     }
+    ImGui::PopStyleVar(2);
 
     // ---------------- 多选工具条 ----------------
     const float rowX = Dimens::ContentPaddingX - 12.0f;
