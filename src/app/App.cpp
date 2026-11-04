@@ -2467,7 +2467,7 @@ void App::drawM3Dialogs() {
         ImGui::EndPopup();
     }
 
-    // ---- 封面：从歌单视频选 ----
+    // ---- 封面：从歌单视频选（带缩略图列表 + 大图预览）----
     if (coverSongDialogRequested_) ImGui::OpenPopup("从歌单视频选封面");
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("从歌单视频选封面", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -2476,18 +2476,84 @@ void App::drawM3Dialogs() {
         if (playlist == nullptr) {
             ImGui::TextDisabled("没有选中的歌单");
         } else {
+            const std::vector<const StoredSong*> coverSongs = currentSongs();
+            if (coverSongSelectedId_ < 0) {
+                for (const StoredSong* song : coverSongs) {
+                    if (!song->coverUrl.empty()) {
+                        coverSongSelectedId_ = song->id;
+                        break;
+                    }
+                }
+            }
             ImGui::TextUnformatted("选择一首歌，用它的视频封面作为歌单封面：");
-            long long pendingSongId = -1;
-            ImGui::BeginChild("##cover_song_list", ImVec2(460.0f, 300.0f), ImGuiChildFlags_Borders);
-            for (const StoredSong* song : currentSongs()) {
+            ImGui::Spacing();
+
+            // 左侧：带缩略图的歌曲列表
+            ImGui::BeginChild("##cover_song_list", ImVec2(420.0f, 320.0f), ImGuiChildFlags_Borders);
+            const float rowHeight = 52.0f;
+            ImGui::GetWindowDrawList();
+            for (const StoredSong* song : coverSongs) {
                 if (song->coverUrl.empty()) continue;
-                const std::string label = Ui::DisplayText(song->title);
-                if (ImGui::Selectable(label.c_str())) pendingSongId = song->id;
+                ImGui::PushID((int)song->id);
+                const ImVec2 rowPos = ImGui::GetCursorScreenPos();
+                const bool selected = song->id == coverSongSelectedId_;
+                if (ImGui::Selectable("##cover_row", selected, ImGuiSelectableFlags_None,
+                                      ImVec2(0.0f, rowHeight))) {
+                    coverSongSelectedId_ = song->id;
+                }
+                Ui::CoverImage(song->title, ImVec2(rowPos.x + 4.0f, rowPos.y + 8.0f), 36.0f, 6.0f,
+                               song->coverUrl, "");
+                Ui::TextEllipsis(song->title, 340.0f, Ui::GetFonts().body,
+                             selected ? Ui::Colors::Text : Ui::Colors::Text2,
+                             ImVec2(rowPos.x + 50.0f, rowPos.y + 16.0f));
+                ImGui::PopID();
             }
             ImGui::EndChild();
-            if (pendingSongId >= 0) {
-                for (const StoredSong* song : currentSongs()) {
-                    if (song->id != pendingSongId) continue;
+
+            // 右侧：选中歌曲的封面大图预览
+            ImGui::SameLine();
+            ImGui::BeginGroup();
+            ImGui::TextUnformatted("封面预览");
+            const StoredSong* selectedSong = nullptr;
+            for (const StoredSong* song : coverSongs) {
+                if (song->id == coverSongSelectedId_) {
+                    selectedSong = song;
+                    break;
+                }
+            }
+            const ImVec2 previewPos = ImGui::GetCursorScreenPos();
+            const float previewSize = 220.0f;
+            if (selectedSong != nullptr && !selectedSong->coverUrl.empty()) {
+                Ui::CoverImage(selectedSong->title, previewPos, previewSize, 12.0f,
+                               selectedSong->coverUrl, "");
+            } else {
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    previewPos, ImVec2(previewPos.x + previewSize, previewPos.y + previewSize),
+                    Ui::Colors::TagBg, 12.0f);
+                ImGui::GetWindowDrawList()->AddText(
+                    Ui::GetFonts().small, 15.0f,
+                    ImVec2(previewPos.x + previewSize * 0.5f - 30.0f, previewPos.y + 100.0f),
+                    Ui::Colors::Text3, "暂无封面");
+            }
+            ImGui::Dummy(ImVec2(previewSize, previewSize));
+            ImGui::EndGroup();
+
+            ImGui::Spacing();
+            long long applySongId = -1;
+            if (selectedSong != nullptr) {
+                ImGui::TextDisabled("已选：%s", Ui::DisplayText(selectedSong->title).c_str());
+            }
+            if (ImGui::Button("应用封面", ImVec2(140.0f, 32.0f))) {
+                applySongId = coverSongSelectedId_;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+                coverSongDialogRequested_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            if (applySongId >= 0) {
+                for (const StoredSong* song : coverSongs) {
+                    if (song->id != applySongId) continue;
                     if (store_.setPlaylistCover(playlist->id, song->coverUrl, "")) {
                         setStatus("已设置歌单封面（来自歌单视频）");
                     }
@@ -2497,10 +2563,12 @@ void App::drawM3Dialogs() {
                 ImGui::CloseCurrentPopup();
             }
         }
-        ImGui::Spacing();
-        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
-            coverSongDialogRequested_ = false;
-            ImGui::CloseCurrentPopup();
+        if (currentPlaylist() == nullptr) {
+            ImGui::Spacing();
+            if (ImGui::Button("关闭", ImVec2(110.0f, 32.0f))) {
+                coverSongDialogRequested_ = false;
+                ImGui::CloseCurrentPopup();
+            }
         }
         ImGui::EndPopup();
     }
@@ -3050,7 +3118,10 @@ void App::draw() {
             deleteSongsDialogRequested_ = true;
         }
     }
-    if (pageActions.pickCoverFromSong) coverSongDialogRequested_ = true;
+    if (pageActions.pickCoverFromSong) {
+        coverSongDialogRequested_ = true;
+        coverSongSelectedId_ = -1;
+    }
     if (pageActions.pickCoverFromFile) chooseLocalCover();
     if (pageActions.scanLocalMusic) scanLocalMusic();
     if (pageActions.requestCacheSettings) cacheSettingsDialogRequested_ = true;

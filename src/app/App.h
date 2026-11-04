@@ -283,6 +283,7 @@ private:
     bool targetPlaylistDialogRequested_ = false;
     bool deleteSongsDialogRequested_ = false;
     bool coverSongDialogRequested_ = false;
+    long long coverSongSelectedId_ = -1;
 
     // M4
     bool sleepDialogRequested_ = false;
