@@ -23,6 +23,11 @@ public:
     void draw();
     void shutdown();
 
+    // M4：托盘 / 全局媒体快捷键用
+    void togglePlayback();
+    void playNext();
+    void playPrevious();
+
 private:
     struct AsyncEvent {
         enum class Kind {
@@ -35,7 +40,8 @@ private:
             ImportProgress,
             ImportDone,
             DownloadDone,
-            LocalScanDone
+            LocalScanDone,
+            Prefetched
         };
         Kind kind = Kind::Login;
         bool ok = false;
@@ -47,6 +53,7 @@ private:
         std::string bvid;
         std::string message;
         int qualityId = 0;
+        int requestedQualityId = -1;
         bool downgraded = false;
         std::vector<std::string> backupUrls;
         int64_t deadlineEpochSeconds = 0;
@@ -120,6 +127,7 @@ private:
     void applyMultiAction(long long targetPlaylistId);
     void chooseLocalCover();
     void startDownloadCurrent();
+    void prefetchNextSong();
     void scanLocalMusic();
     void finishDownload(const AsyncEvent& event);
     void finishLocalScan(const AsyncEvent& event);
@@ -157,6 +165,16 @@ private:
     std::string curBvid_;
     std::string curStreamUrl_;
     long long curCid_ = 0;
+
+    // 已解析的流地址缓存（省掉重复取流的 1s 左右；也用于预取下一首）
+    struct CachedStream {
+        std::string url;
+        int requestedQualityId = 0;  // 请求的档位（0=自动），用于判断缓存是否匹配当前音质设置
+        int qualityId = 0;           // 实际返回的档位（显示用）
+        std::vector<std::string> backupUrls;
+        int64_t deadlineEpochSeconds = 0;
+    };
+    std::map<long long, CachedStream> streamCache_;
     std::vector<std::string> curBackups_;
     int backupIndex_ = 0;
     int64_t curDeadlineEpoch_ = 0;

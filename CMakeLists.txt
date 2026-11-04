@@ -53,6 +53,7 @@ set(APP_SOURCES
     src/ui/Theme.cpp
     src/ui/Components.cpp
     src/ui/ImageCache.cpp
+    src/platform/SystemTray.cpp
     src/ui/TitleBar.cpp
     src/ui/WindowFrame.cpp
     src/ui/Sidebar.cpp

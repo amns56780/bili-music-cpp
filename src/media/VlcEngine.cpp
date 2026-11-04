@@ -221,6 +221,8 @@ bool VlcEngine::playPath(const std::wstring& path, std::string* error) {
         return false;
     }
     // 新曲目：音频输出会重建，音量写出状态重置，pumpVolume 会重新下发一次
+    pausedRequested_ = false;
+    pausedAt_ = {};
     volumeApplied_ = false;
     lastVlcVolume_ = -1;
     volumeDirty_ = true;
@@ -244,6 +246,9 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
     // 加大到 5s 让恢复后先有足够的缓冲；http-reconnect 让连接断掉时自动重连。
     api_->libvlc_media_add_option(media_, ":network-caching=20000");
     api_->libvlc_media_add_option(media_, ":http-reconnect=true");
+    // 网络音频时钟抖动相关：减少恢复播放后的断续/卡顿
+    api_->libvlc_media_add_option(media_, ":clock-jitter=0");
+    api_->libvlc_media_add_option(media_, ":clock-synchro=0");
     if (!referrer.empty()) {
         api_->libvlc_media_add_option(media_, (":" + std::string("http-referrer=") + referrer).c_str());
     }
@@ -259,6 +264,8 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
         appendError(error, "启动播放失败");
         return false;
     }
+    pausedRequested_ = false;
+    pausedAt_ = {};
     volumeApplied_ = false;
     lastVlcVolume_ = -1;
     volumeDirty_ = true;
@@ -267,11 +274,19 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
 }
 
 void VlcEngine::pause() {
-    if (api_ && player_) api_->libvlc_media_player_set_pause(player_, 1);
+    if (!api_ || !player_) return;
+    pausedRequested_ = true;
+    pausedAt_ = std::chrono::steady_clock::now();
+    api_->libvlc_media_player_set_pause(player_, 1);
 }
 
 void VlcEngine::resume() {
-    if (api_ && player_) api_->libvlc_media_player_set_pause(player_, 0);
+    if (!api_ || !player_) return;
+    // 用 libvlc_media_player_play 恢复：对已暂停的播放器等价于恢复播放，
+    // 不会重建音频输出，实测比 set_pause(0) 的恢复静音比例略低。
+    pausedRequested_ = false;
+    pausedAt_ = {};
+    api_->libvlc_media_player_play(player_);
 }
 
 void VlcEngine::resumeByPlay() {
@@ -281,7 +296,12 @@ void VlcEngine::resumeByPlay() {
 
 void VlcEngine::togglePause() {
     if (!api_ || !player_) return;
-    if (isPlaying()) pause(); else resume();
+    // 用自己记录的暂停状态，避免缓冲期间 isPlaying()==false 把「暂停」误判成「恢复」
+    if (pausedRequested_) {
+        resume();
+    } else {
+        pause();
+    }
 }
 
 void VlcEngine::stop() {

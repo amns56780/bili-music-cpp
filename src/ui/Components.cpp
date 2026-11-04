@@ -421,9 +421,25 @@ void CoverImage(const std::string& seed, ImVec2 pos, float size, float radius,
         CoverPlaceholder(seed, pos, size, radius);
         return;
     }
-    ImGui::GetWindowDrawList()->AddImageRounded(
-        texture, pos, ImVec2(pos.x + size, pos.y + size), ImVec2(0, 0), ImVec2(1, 1),
-        IM_COL32(255, 255, 255, 255), radius);
+    // 和 Java 版 BmCover 一致：ContentScale.Crop（保持比例，居中裁切填满方形）
+    ImVec2 uv0(0.0f, 0.0f);
+    ImVec2 uv1(1.0f, 1.0f);
+    int textureWidth = 0;
+    int textureHeight = 0;
+    if (Ui::CoverTextureSize(texture, &textureWidth, &textureHeight) && textureWidth > 0 &&
+        textureHeight > 0) {
+        if (textureWidth > textureHeight) {
+            const float visible = (float)textureHeight / (float)textureWidth;
+            uv0.x = (1.0f - visible) * 0.5f;
+            uv1.x = uv0.x + visible;
+        } else if (textureHeight > textureWidth) {
+            const float visible = (float)textureWidth / (float)textureHeight;
+            uv0.y = (1.0f - visible) * 0.5f;
+            uv1.y = uv0.y + visible;
+        }
+    }
+    ImGui::GetWindowDrawList()->AddImageRounded(texture, pos, ImVec2(pos.x + size, pos.y + size),
+                                                uv0, uv1, IM_COL32(255, 255, 255, 255), radius);
 }
 
 void CoverPlaceholder(const std::string& seed, ImVec2 pos, float size, float radius) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -59,6 +60,11 @@ private:
 
     struct Api;
     Api* api_ = nullptr;
+
+    // 暂停/恢复：暂停久了再直接 set_pause(0) 容易在恢复瞬间断断续续，
+    // 恢复前先 seek 到当前位置强制刷新 demux/音频输出。
+    bool pausedRequested_ = false;
+    std::chrono::steady_clock::time_point pausedAt_{};
 
     media::AppVolume appVolume_;
     bool sessionVolumeEnabled_ = false;

@@ -12,6 +12,9 @@
 
 #include <GLFW/glfw3.h>
 
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -20,6 +23,7 @@
 #include "bili/BiliService.h"
 #include "media/AppVolume.h"
 #include "media/VlcEngine.h"
+#include "platform/SystemTray.h"
 #include "ui/AppIcon.h"
 #include "ui/ImageCache.h"
 #include "ui/WindowFrame.h"
@@ -114,6 +118,7 @@ int runPauseTest(const std::string& mode, const std::string& target) {
 
     sample("baseline", 3);
     engine.togglePause();
+    // 模拟用户暂停一会儿（超过 1.5s 的恢复 seek 阈值）
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     if (usePlayResume) {
         engine.resumeByPlay();
@@ -121,7 +126,7 @@ int runPauseTest(const std::string& mode, const std::string& target) {
         engine.togglePause();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(800));
-    sample("after-resume", 6);
+    sample("after-resume", 8);
     std::printf("resume-mode=%s skipVolume=%d\n", usePlayResume ? "play" : "set_pause",
                 skipVolume ? 1 : 0);
     engine.shutdown();
@@ -224,8 +229,40 @@ int main(int argc, char** argv) {
     App app;
     app.init(window);
 
+    HWND nativeWindow = glfwGetWin32Window(window);
+    bool exitRequested = false;
+    platform::SystemTray tray;
+    platform::TrayCallbacks trayCallbacks;
+    trayCallbacks.onShowWindow = [&]() {
+        ShowWindow(nativeWindow, SW_SHOW);
+        ShowWindow(nativeWindow, SW_RESTORE);
+        SetForegroundWindow(nativeWindow);
+        glfwFocusWindow(window);
+    };
+    trayCallbacks.onTogglePlay = [&]() { app.togglePlayback(); };
+    trayCallbacks.onNext = [&]() { app.playNext(); };
+    trayCallbacks.onPrevious = [&]() { app.playPrevious(); };
+    trayCallbacks.onExit = [&]() {
+        exitRequested = true;
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    };
+    tray.init("bilimusic", trayCallbacks);
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        if (glfwWindowShouldClose(window)) {
+            // 关闭按钮 = 收进托盘（托盘退出才真正退出）
+            if (!exitRequested && tray.active()) {
+                glfwSetWindowShouldClose(window, GLFW_FALSE);
+                ShowWindow(nativeWindow, SW_HIDE);
+                continue;
+            }
+            break;
+        }
+        if (IsWindowVisible(nativeWindow) == FALSE) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -245,6 +282,7 @@ int main(int argc, char** argv) {
         glfwSwapBuffers(window);
     }
 
+    tray.shutdown();
     app.shutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

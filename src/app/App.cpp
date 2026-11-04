@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <set>
 #include <thread>
@@ -358,10 +359,36 @@ void App::startOnlinePlayFor(long long songId, const std::string& bvid, long lon
     currentIsOnline_ = true;
     curBvid_ = bvid;
     curCid_ = cid;
-    stallWatchStartTick_ = GetTickCount64();
     backupIndex_ = 0;
-    setStatus("正在取流：" + title + "（" + bvid + "，音质 " + qualityNameForId(qualityId_) + "）");
+    stallRetries_ = 0;
     const int qualityIdSnapshot = qualityId_;
+
+    // 命中已解析地址 → 立刻播放（暂停/切歌回来后无需再等 1s 取流）
+    auto cached = streamCache_.find(songId);
+    if (cached != streamCache_.end() && cached->second.requestedQualityId == qualityIdSnapshot) {
+        const int64_t nowSeconds = (int64_t)std::time(nullptr);
+        if (cached->second.deadlineEpochSeconds == 0 ||
+            cached->second.deadlineEpochSeconds - nowSeconds > 120) {
+            std::string error;
+            if (engine_.playUrl(cached->second.url, kReferer, kUserAgent, &error)) {
+                engine_.setVolume(volume_);
+                curStreamUrl_ = cached->second.url;
+                curBackups_ = cached->second.backupUrls;
+                curDeadlineEpoch_ = cached->second.deadlineEpochSeconds;
+                lastStreamQualityId_ = cached->second.qualityId;
+                pendingSongId_ = -1;
+                stallWatchStartTick_ = 0;
+                setStatus("正在播放：" + title + "（" + qualityNameForId(cached->second.qualityId) +
+                          "）");
+                AppLog::info("App", "命中流缓存直接播放 bvid=" + bvid);
+                prefetchNextSong();
+                return;
+            }
+        }
+    }
+
+    stallWatchStartTick_ = GetTickCount64();
+    setStatus("正在取流：" + title + "（" + bvid + "，音质 " + qualityNameForId(qualityId_) + "）");
     std::thread([this, songId, bvid, cid, title, artist, qualityIdSnapshot]() {
         AsyncEvent event;
         event.kind = AsyncEvent::Kind::Play;
@@ -374,6 +401,7 @@ void App::startOnlinePlayFor(long long songId, const std::string& bvid, long lon
         event.ok = stream.ok;
         event.url = stream.url;
         event.qualityId = stream.qualityId;
+        event.requestedQualityId = qualityIdSnapshot;
         event.downgraded = stream.downgraded;
         event.backupUrls = stream.backupUrls;
         event.deadlineEpochSeconds = stream.deadlineEpochSeconds;
@@ -507,8 +535,38 @@ void App::syncPlaybackState() {
     checkPlaybackStall();
 }
 
+void App::togglePlayback() {
+    AppLog::info("App", "切换播放/暂停（托盘或全局媒体键）");
+    if (!hasMedia_) {
+        playFirstPlayable();
+        return;
+    }
+    const bool wasPlaying = engine_.isPlaying();
+    engine_.togglePause();
+    if (wasPlaying) {
+        // 暂停：停掉卡顿看门狗，避免暂停期间误判重取流
+        stallWatchStartTick_ = 0;
+    } else if (currentIsOnline_ && playingSongId_ >= 0) {
+        // 恢复：重新开始观察，万一恢复失败还能自动重取
+        stallWatchStartTick_ = GetTickCount64();
+        stallRetries_ = 0;
+    }
+}
+
+void App::playNext() {
+    AppLog::info("App", "下一首（托盘或全局媒体键）");
+    stepSong(1);
+}
+
+void App::playPrevious() {
+    AppLog::info("App", "上一首（托盘或全局媒体键）");
+    stepSong(-1);
+}
+
 void App::checkPlaybackStall() {
     if (!currentIsOnline_) return;
+    // 暂停/缓冲期间位置本来就不前进，不能当成「卡住」去重取流
+    if (!playing_) return;
     if (stallWatchStartTick_ == 0) return;
     if (positionMs_ > 800.0) {  // 已经开始正常出声，停止观察
         stallWatchStartTick_ = 0;
@@ -613,6 +671,19 @@ void App::pollAsync() {
             setStatus(event.progressText);
             continue;
         }
+        if (event.kind == AsyncEvent::Kind::Prefetched) {
+            if (event.ok && event.songId >= 0) {
+                CachedStream entry;
+                entry.url = event.url;
+                entry.requestedQualityId = event.requestedQualityId;
+                entry.qualityId = event.qualityId;
+                entry.backupUrls = event.backupUrls;
+                entry.deadlineEpochSeconds = event.deadlineEpochSeconds;
+                streamCache_[event.songId] = std::move(entry);
+                AppLog::info("App", "已预取下一首流地址 songId=" + std::to_string(event.songId));
+            }
+            continue;
+        }
         if (event.kind == AsyncEvent::Kind::DownloadDone) {
             finishDownload(event);
             continue;
@@ -696,6 +767,15 @@ void App::pollAsync() {
             continue;
         }
         curStreamUrl_ = event.url;
+        if (event.songId >= 0) {
+            CachedStream entry;
+            entry.url = event.url;
+            entry.requestedQualityId = event.requestedQualityId;
+            entry.qualityId = event.qualityId;
+            entry.backupUrls = event.backupUrls;
+            entry.deadlineEpochSeconds = event.deadlineEpochSeconds;
+            streamCache_[event.songId] = std::move(entry);
+        }
         std::string error;
         if (!engine_.playUrl(event.url, kReferer, kUserAgent, &error)) {
             setStatus("播放失败：" + error, true);
@@ -720,6 +800,7 @@ void App::pollAsync() {
         if (event.downgraded) message += "（请求的档位不可用，已自动降级）";
         setStatus(message);
         AppLog::info("App", message + " bvid=" + event.bvid);
+        if (event.kind == AsyncEvent::Kind::Play) prefetchNextSong();
     }
 }
 
@@ -1035,6 +1116,55 @@ void App::chooseLocalCover() {
     }
 }
 
+
+void App::prefetchNextSong() {
+    const std::vector<const StoredSong*> songs = currentSongs();
+    if (songs.size() <= 1) return;
+    int index = -1;
+    for (size_t i = 0; i < songs.size(); ++i) {
+        if (songs[i]->id == playingSongId_) {
+            index = (int)i;
+            break;
+        }
+    }
+    if (index < 0) return;
+    const int qualityIdSnapshot = qualityId_;
+    for (int step = 1; step <= (int)songs.size(); ++step) {
+        const int next = (index + step) % (int)songs.size();
+        const StoredSong* song = songs[(size_t)next];
+        if (!song->localPath.empty() || song->bvid.empty() || song->cid <= 0) continue;
+        auto it = streamCache_.find(song->id);
+        if (it != streamCache_.end() && it->second.requestedQualityId == qualityIdSnapshot) {
+            const int64_t nowSeconds = (int64_t)std::time(nullptr);
+            if (it->second.deadlineEpochSeconds == 0 ||
+                it->second.deadlineEpochSeconds - nowSeconds > 120) {
+                return;  // 已经预取过
+            }
+        }
+        const long long songId = song->id;
+        const std::string bvid = song->bvid;
+        const long long cid = song->cid;
+        const std::string title = song->title;
+        const std::string artist = song->artist;
+        std::thread([this, songId, bvid, cid, title, artist, qualityIdSnapshot]() {
+            AsyncEvent event;
+            event.kind = AsyncEvent::Kind::Prefetched;
+            event.songId = songId;
+            event.title = title;
+            event.artist = artist;
+            const bili::AudioStreamInfo stream = bili_.resolveAudio(bvid, cid, qualityIdSnapshot);
+            event.ok = stream.ok;
+            event.url = stream.url;
+            event.qualityId = stream.qualityId;
+            event.requestedQualityId = qualityIdSnapshot;
+            event.backupUrls = stream.backupUrls;
+            event.deadlineEpochSeconds = stream.deadlineEpochSeconds;
+            event.message = stream.message;
+            postAsync(std::move(event));
+        }).detach();
+        return;
+    }
+}
 
 void App::startDownloadCurrent() {
     if (playingSongId_ < 0) {
@@ -1702,6 +1832,15 @@ void App::draw() {
     playBarData.mode = mode_;
     playBarData.title = playingTitle_.empty() ? "还没有在播放" : playingTitle_;
     playBarData.artist = playingArtist_.empty() ? "选一个歌单，或粘贴 BV 号" : playingArtist_;
+    if (const StoredSong* currentSong = findSong(playingSongId_)) {
+        playBarData.coverUrl = currentSong->coverUrl;
+    }
+    if (playBarData.coverUrl.empty()) {
+        if (const StoredPlaylist* playlist = currentPlaylist()) {
+            playBarData.coverUrl = playlist->coverUrl;
+            playBarData.coverPath = playlist->coverPath;
+        }
+    }
     playBarData.showQuality = currentIsOnline_;
     playBarData.qualityId = qualityId_;
     playBarData.qualityLabel =
@@ -1794,23 +1933,17 @@ void App::draw() {
     if (pageActions.requestDelete) openDeletePlaylistDialog();
     if (pageActions.openMenu) setStatus("封面 / 分享：M3 后半段实现");
 
-    if (playBarActions.togglePlay) {
-        if (hasMedia_) {
-            engine_.togglePause();
-        } else {
-            playFirstPlayable();
-        }
-    }
-    if (playBarActions.previous) stepSong(-1);
-    if (playBarActions.next) stepSong(1);
+    if (playBarActions.togglePlay) togglePlayback();
+    if (playBarActions.previous) playPrevious();
+    if (playBarActions.next) playNext();
     if (playBarActions.cycleMode) {
         mode_ = (mode_ + 1) % 4;
         setStatus("播放模式：" + formatModeName(mode_));
     }
     if (playBarActions.seekFinished) engine_.seekMs((int64_t)playBarActions.seekMs);
     if (playBarActions.volumeWheelDelta != 0.0f) {
-        // 滚轮微调：每格 2%
-        int next = volume_ + (int)std::lround(playBarActions.volumeWheelDelta * 2.0f);
+        // 滚轮微调：每格 1%
+        int next = volume_ + (int)std::lround(playBarActions.volumeWheelDelta * 1.0f);
         volume_ = next < 0 ? 0 : (next > 100 ? 100 : next);
         engine_.setVolume(volume_);
     }

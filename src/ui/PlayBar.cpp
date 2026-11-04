@@ -46,7 +46,8 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     ImDrawList* draw = ImGui::GetWindowDrawList();
 
     // ---------------- 左：当前曲目 ----------------
-    CoverPlaceholder(data.title, abs(18.0f, (height - Dimens::CoverPlayer) / 2.0f), Dimens::CoverPlayer, 9.0f);
+    CoverImage(data.title, abs(18.0f, (height - Dimens::CoverPlayer) / 2.0f),
+               Dimens::CoverPlayer, 9.0f, data.coverUrl, data.coverPath);
     TextEllipsis(data.title, 236.0f, GetFonts().body, Colors::Text, abs(80.0f, 20.0f));
     TextEllipsis(data.artist, 236.0f, GetFonts().small, Colors::Text3, abs(80.0f, 39.0f));
     ImGui::SetCursorPos(ImVec2(18.0f + 330.0f - 32.0f, 11.0f));

@@ -164,6 +164,18 @@ ImTextureID CoverTextureFor(const std::string& coverUrl, const std::string& cove
     return 0;
 }
 
+bool CoverTextureSize(ImTextureID texture, int* width, int* height) {
+    if (texture == 0) return false;
+    std::lock_guard<std::mutex> lock(gMutex);
+    for (const auto& item : gEntries) {
+        if (item.second.texture != texture) continue;
+        if (width != nullptr) *width = item.second.width;
+        if (height != nullptr) *height = item.second.height;
+        return true;
+    }
+    return false;
+}
+
 void PumpImageCache() {
     std::lock_guard<std::mutex> lock(gMutex);
     for (auto& item : gEntries) {
