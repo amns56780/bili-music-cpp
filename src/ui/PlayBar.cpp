@@ -120,7 +120,7 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
     if (data.showQuality) {
         // 胶囊宽度按文字自适应（之前固定 66px，短档位会多出一截空白）
         const float labelWidth = MeasureText(GetFonts().small, FontSize::Small, data.qualityLabel);
-        float chipWidth = 12.0f + labelWidth + 14.0f;
+        float chipWidth = 14.0f + labelWidth + 14.0f;
         const float maxChipWidth = rightLeft - (progressRight + 8.0f) - 6.0f;
         if (chipWidth > maxChipWidth) chipWidth = maxChipWidth;
         const float chipHeight = 24.0f;
@@ -133,13 +133,9 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         if (qualityHovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         draw->AddRectFilled(abs(chipX, chipY), abs(chipX + chipWidth, chipY + chipHeight),
                             qualityHovered ? Colors::Hover : Colors::TagBg, 11.0f);
-        TextEllipsis(data.qualityLabel, chipWidth - 24.0f, GetFonts().small, Colors::Text2,
-                     abs(chipX + 8.0f, chipY + 4.0f));
-        // 下拉小三角用几何图形画（字体里没有 ▾ 字形）
-        const ImVec2 arrow(chipX + chipWidth - 12.0f, chipY + chipHeight / 2.0f);
-        draw->AddTriangleFilled(ImVec2(arrow.x - 4.0f, arrow.y - 2.0f),
-                                ImVec2(arrow.x + 4.0f, arrow.y - 2.0f),
-                                ImVec2(arrow.x, arrow.y + 3.0f), Colors::Text3);
+        // 文字水平居中（不再画下拉三角，右侧不会再多出一块空白）
+        TextEllipsis(data.qualityLabel, labelWidth + 1.0f, GetFonts().small, Colors::Text2,
+                     abs(chipX + (chipWidth - labelWidth) * 0.5f, chipY + 3.0f));
         if (qualityClicked) ImGui::OpenPopup("quality_menu");
         ImGui::PushStyleColor(ImGuiCol_PopupBg, Ui::Vec4(Ui::Colors::Dialog));
         ImGui::PushStyleColor(ImGuiCol_Text, Ui::Vec4(Ui::Colors::Text));

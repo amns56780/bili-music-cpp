@@ -48,6 +48,9 @@ std::string findAsset(const std::wstring& relative) {
 
 std::string findChineseFont() {
     const char* candidates[] = {
+    // 优先用微软雅黑 Bold（用户反馈字体偏细）
+        "C:\\\\Windows\\\\Fonts\\\\msyhbd.ttc",
+        "C:\\\\Windows\\\\Fonts\\\\msyhbd.ttf",
         "C:\\\\Windows\\\\Fonts\\\\msyh.ttc",
         "C:\\\\Windows\\\\Fonts\\\\msyh.ttf",
         "C:\\\\Windows\\\\Fonts\\\\simhei.ttf",
