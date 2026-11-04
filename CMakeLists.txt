@@ -78,7 +78,8 @@ endif()
 
 if (WIN32)
     # comdlg32 = 打开文件对话框；shell32 / ole32 留给后续托盘与拖放
-    target_link_libraries(bilimusic PRIVATE comdlg32 shell32 ole32 uuid user32 gdi32 winhttp)
+    target_link_libraries(bilimusic PRIVATE comdlg32 shell32 ole32 uuid user32 gdi32 winhttp
+        advapi32)
 endif()
 
 # Windows exe 图标资源（与 Java 版同款 bilimusic.ico）

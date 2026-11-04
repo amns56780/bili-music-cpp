@@ -592,10 +592,43 @@ void App::applyOutputDevice(const std::string& id) {
     AppLog::info("App", "切换输出设备：" + name + " (" + id + ")");
 }
 
-void App::toggleImmersive() {
-    AppLog::info("App", "沉浸模式切换请求");
+namespace {
+
+ImU32 fadeImColor(ImU32 color, float alpha) {
+    const ImU32 a = (ImU32)(((color >> IM_COL32_A_SHIFT) & 0xFF) * alpha);
+    return (color & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+}
+
+}  // namespace
+
+void App::openImmersive() {
+    if (immersiveOpen_ && !immersiveClosing_) return;
+    immersiveOpen_ = true;
+    immersiveClosing_ = false;
+    immersiveAnim_ = 0.0f;
+    immersiveEnteredTick_ = GetTickCount64();
+    immersiveVolumeOpen_ = false;
+    immersiveBgMenuOpen_ = false;
+    immersiveModeTip_.clear();
+    AppLog::info("App", "打开沉浸模式（自下而上滑入）");
+}
+
+void App::closeImmersive() {
+    if (!immersiveOpen_) return;
+    if (immersiveFullscreen_) {
+        glfwSetWindowMonitor(window_, nullptr, savedWindowX_, savedWindowY_, savedWindowW_,
+                             savedWindowH_, GLFW_DONT_CARE);
+        immersiveFullscreen_ = false;
+    }
+    immersiveClosing_ = true;
+    immersiveVolumeOpen_ = false;
+    immersiveBgMenuOpen_ = false;
+    AppLog::info("App", "关闭沉浸模式");
+}
+
+void App::toggleImmersiveFullscreen() {
     if (window_ == nullptr) return;
-    if (!immersive_) {
+    if (!immersiveFullscreen_) {
         glfwGetWindowPos(window_, &savedWindowX_, &savedWindowY_);
         glfwGetWindowSize(window_, &savedWindowW_, &savedWindowH_);
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
@@ -603,128 +636,533 @@ void App::toggleImmersive() {
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
         if (mode == nullptr) return;
         glfwSetWindowMonitor(window_, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
-        immersive_ = true;
-        AppLog::info("App", "进入沉浸模式（全屏）");
+        immersiveFullscreen_ = true;
+        AppLog::info("App", "沉浸模式：进入全屏");
     } else {
         glfwSetWindowMonitor(window_, nullptr, savedWindowX_, savedWindowY_, savedWindowW_,
                              savedWindowH_, GLFW_DONT_CARE);
-        immersive_ = false;
-        AppLog::info("App", "退出沉浸模式");
+        immersiveFullscreen_ = false;
+        AppLog::info("App", "沉浸模式：退出全屏");
     }
+}
+
+void App::pickImmersiveImage() {
+    const std::wstring path = chooseImageFileW();
+    if (path.empty()) return;
+    immersiveBgPath_ = wideToUtf8(path);
+    immersiveBgMode_ = 1;
+    AppLog::info("App", "沉浸模式自定义背景：" + immersiveBgPath_);
 }
 
 void App::drawImmersive() {
     const ImGuiIO& io = ImGui::GetIO();
-    const ImVec2 display = io.DisplaySize;
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    const float width = display.x;
-    const float height = display.y;
-    const float centerX = width * 0.5f;
-    // 全屏分辨率比窗口大：按 1240x860 的设计稿等比放大
+    const float delta = io.DeltaTime > 0.0f ? io.DeltaTime : 0.016f;
+    if (immersiveClosing_) {
+        immersiveAnim_ = std::max(0.0f, immersiveAnim_ - delta * 4.5f);
+    } else if (immersiveOpen_) {
+        immersiveAnim_ = std::min(1.0f, immersiveAnim_ + delta * 4.5f);
+    } else {
+        return;
+    }
+    const float anim = immersiveAnim_;
+    if (anim <= 0.0f) {
+        immersiveOpen_ = false;
+        immersiveClosing_ = false;
+        return;
+    }
+    const float width = io.DisplaySize.x;
+    const float height = io.DisplaySize.y;
+    const float slideOffset = (1.0f - anim) * height;
     const float scale = std::min(width / 1240.0f, height / 860.0f);
     auto px = [scale](float value) { return value * scale; };
+    auto fade = [anim](ImU32 color) { return fadeImColor(color, anim); };
+
+    // 沉浸模式期间不创建侧栏/主内容/播放条等子窗口：直接在 root 窗口里绘制，
+    // 这样整屏的鼠标命中都落在 root 上，按钮/滑条才能正常点击。
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+
+    // 铺满整屏的点击拦截层（允许后续控件覆盖/命中）
+    ImGui::SetCursorPos(ImVec2(0, 0));
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::InvisibleButton("##immersive_blocker", ImVec2(width, height));
 
     const StoredSong* song = findSong(playingSongId_);
     std::string coverUrl;
     std::string coverPath;
-    std::string playlistTitle;
     if (song != nullptr) coverUrl = song->coverUrl;
     if (const StoredPlaylist* playlist = currentPlaylist()) {
-        playlistTitle = playlist->title;
         if (coverUrl.empty()) {
             coverUrl = playlist->coverUrl;
             coverPath = playlist->coverPath;
         }
     }
+    const std::string currentTitle = playingTitle_.empty() ? "还没有在播放" : playingTitle_;
+    const std::string currentArtist = playingArtist_.empty() ? "未知UP主" : playingArtist_;
 
-    const ImTextureID background = Ui::CoverTextureFor(coverUrl, coverPath);
-    if (background != 0) {
-        draw->AddImage(background, ImVec2(0, 0), display);
+    // ---------------- 背景 ----------------
+    ImTextureID bgTexture = (ImTextureID)0;
+    if (immersiveBgMode_ == 0) {
+        bgTexture = Ui::BlurredWallpaperTexture();
+    } else if (immersiveBgMode_ == 1) {
+        bgTexture = Ui::BlurredImageTexture(immersiveBgPath_);
+    }
+    const ImVec2 bgMin(0.0f, slideOffset);
+    const ImVec2 bgMax(width, slideOffset + height);
+    if (bgTexture != 0) {
+        int texW = 0;
+        int texH = 0;
+        Ui::CoverTextureSize(bgTexture, &texW, &texH);
+        ImVec2 uv0(0.0f, 0.0f);
+        ImVec2 uv1(1.0f, 1.0f);
+        if (texW > 0 && texH > 0) {
+            const float screenAspect = width / height;
+            const float textureAspect = (float)texW / (float)texH;
+            if (textureAspect > screenAspect) {
+                const float visible = screenAspect / textureAspect;
+                uv0.x = (1.0f - visible) * 0.5f;
+                uv1.x = uv0.x + visible;
+            } else {
+                const float visible = textureAspect / screenAspect;
+                uv0.y = (1.0f - visible) * 0.5f;
+                uv1.y = uv0.y + visible;
+            }
+        }
+        draw->AddImage(bgTexture, bgMin, bgMax, uv0, uv1, fade(IM_COL32(255, 255, 255, 255)));
     } else {
-        Ui::CoverPlaceholder(playingTitle_.empty() ? "♪" : playingTitle_, ImVec2(0, 0), height, 0.0f);
+        draw->AddRectFilledMultiColor(bgMin, bgMax, fade(IM_COL32(0x1B, 0x1B, 0x22, 255)),
+                                      fade(IM_COL32(0x1B, 0x1B, 0x22, 255)),
+                                      fade(IM_COL32(0x0A, 0x0A, 0x0C, 255)),
+                                      fade(IM_COL32(0x0A, 0x0A, 0x0C, 255)));
     }
-    draw->AddRectFilled(ImVec2(0, 0), display, IM_COL32(8, 8, 10, 200));
+    const float midY = bgMin.y + height * 0.5f;
+    draw->AddRectFilledMultiColor(bgMin, ImVec2(width, midY), fade(IM_COL32(0, 0, 0, 0x99)),
+                                  fade(IM_COL32(0, 0, 0, 0x99)), fade(IM_COL32(0, 0, 0, 0x44)),
+                                  fade(IM_COL32(0, 0, 0, 0x44)));
+    draw->AddRectFilledMultiColor(ImVec2(0.0f, midY), bgMax, fade(IM_COL32(0, 0, 0, 0x44)),
+                                  fade(IM_COL32(0, 0, 0, 0x44)), fade(IM_COL32(0, 0, 0, 0xC8)),
+                                  fade(IM_COL32(0, 0, 0, 0xC8)));
 
-    const std::string title = playingTitle_.empty() ? "还没有在播放" : playingTitle_;
-    const std::string artist = playingArtist_.empty() ? playlistTitle : playingArtist_;
+    // ---------------- 本地控件（前景 drawlist 版本）----------------
+    auto roundButton = [&](const char* id, uint32_t icon, float x, float y, float size,
+                           float iconSize, bool active, ImU32 background) -> bool {
+        ImGui::SetCursorScreenPos(ImVec2(x, y));
+        ImGui::SetNextItemAllowOverlap();
+        ImGui::PushID(id);
+        const bool clicked = ImGui::InvisibleButton("##btn", ImVec2(size, size));
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        const ImVec2 center(x + size * 0.5f, y + size * 0.5f);
+        ImU32 bgColor = background;
+        if (hovered) {
+            bgColor = background == IM_COL32(0, 0, 0, 0)
+                          ? IM_COL32(255, 255, 255, 0x22)
+                          : IM_COL32(0xEC, 0x41, 0x41, 0xDD);
+        }
+        if (bgColor != IM_COL32(0, 0, 0, 0)) draw->AddCircleFilled(center, size * 0.5f, fade(bgColor), 32);
+        const std::string glyph = Icons::Utf8(icon);
+        draw->AddText(Ui::GetFonts().body, iconSize,
+                      ImVec2(center.x - iconSize * 0.5f, center.y - iconSize * 0.325f),
+                      fade(hovered || active ? IM_COL32(255, 255, 255, 255)
+                                             : IM_COL32(255, 255, 255, 220)),
+                      glyph.c_str());
+        return clicked;
+    };
+    auto playButton = [&](const char* id, float centerX, float centerY, float size) -> bool {
+        ImGui::SetCursorScreenPos(ImVec2(centerX - size * 0.5f, centerY - size * 0.5f));
+        ImGui::SetNextItemAllowOverlap();
+        ImGui::PushID(id);
+        const bool clicked = ImGui::InvisibleButton("##play", ImVec2(size, size));
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        draw->AddCircleFilled(ImVec2(centerX, centerY), size * 0.5f,
+                              fade(hovered ? IM_COL32(0xF0, 0x52, 0x52, 255)
+                                           : IM_COL32(0xEC, 0x41, 0x41, 255)),
+                              48);
+        const ImU32 white = fade(IM_COL32(255, 255, 255, 255));
+        if (playing_) {
+            const float barWidth = size * 0.087f;
+            const float barHeight = size * 0.31f;
+            const float gap = size * 0.10f;
+            draw->AddRectFilled(ImVec2(centerX - gap - barWidth, centerY - barHeight * 0.5f),
+                                ImVec2(centerX - gap, centerY + barHeight * 0.5f), white, 1.0f);
+            draw->AddRectFilled(ImVec2(centerX + gap, centerY - barHeight * 0.5f),
+                                ImVec2(centerX + gap + barWidth, centerY + barHeight * 0.5f), white,
+                                1.0f);
+        } else {
+            const float half = size * 0.155f;
+            const ImVec2 a(centerX - half * 0.6f + size * 0.025f, centerY - half);
+            const ImVec2 b(centerX - half * 0.6f + size * 0.025f, centerY + half);
+            const ImVec2 c(centerX + half * 1.1f, centerY);
+            draw->AddTriangleFilled(a, b, c, white);
+        }
+        return clicked;
+    };
+    auto coverImage = [&](const std::string& seed, float x, float y, float size, float radius) {
+        const ImTextureID texture = Ui::CoverTextureFor(coverUrl, coverPath);
+        if (texture == 0) {
+            draw->AddRectFilled(ImVec2(x, y), ImVec2(x + size, y + size),
+                                fade(IM_COL32(0x33, 0x33, 0x3D, 255)), radius);
+            const std::string glyph = Icons::Utf8(Icons::MusicNote);
+            const float textSize = size * 0.30f;
+            const float textWidth = Ui::MeasureText(Ui::GetFonts().xl, textSize, glyph);
+            draw->AddText(Ui::GetFonts().xl, textSize,
+                          ImVec2(x + (size - textWidth) * 0.5f, y + size * 0.5f - textSize * 0.4f),
+                          fade(IM_COL32(255, 255, 255, 235)), glyph.c_str());
+            return;
+        }
+        int texW = 0;
+        int texH = 0;
+        Ui::CoverTextureSize(texture, &texW, &texH);
+        ImVec2 uv0(0, 0);
+        ImVec2 uv1(1, 1);
+        if (texW > 0 && texH > 0) {
+            if (texW > texH) {
+                const float visible = (float)texH / (float)texW;
+                uv0.x = (1.0f - visible) * 0.5f;
+                uv1.x = uv0.x + visible;
+            } else if (texH > texW) {
+                const float visible = (float)texW / (float)texH;
+                uv0.y = (1.0f - visible) * 0.5f;
+                uv1.y = uv0.y + visible;
+            }
+        }
+        draw->AddImageRounded(texture, ImVec2(x, y), ImVec2(x + size, y + size), uv0, uv1,
+                              fade(IM_COL32(255, 255, 255, 255)), radius);
+    };
+    // 返回 true 表示松手（finished），changed 通过引用返回
+    auto slider = [&](const char* id, float x, float y, float width, float* value,
+                      float barHeight, bool* changed) -> bool {
+        ImGui::SetCursorScreenPos(ImVec2(x, y));
+        ImGui::SetNextItemAllowOverlap();
+        ImGui::PushID(id);
+        ImGui::InvisibleButton("##slider", ImVec2(width, px(14)));
+        const bool active = ImGui::IsItemActive();
+        const bool deactivated = ImGui::IsItemDeactivated();
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (hovered || active) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (active) {
+            const float mouseX = io.MousePos.x;
+            float ratio = (mouseX - x) / width;
+            ratio = ratio < 0.0f ? 0.0f : (ratio > 1.0f ? 1.0f : ratio);
+            if (ratio != *value) {
+                *value = ratio;
+                *changed = true;
+            }
+        }
+        const float centerY = y + px(14) * 0.5f;
+        draw->AddRectFilled(ImVec2(x, centerY - barHeight * 0.5f),
+                            ImVec2(x + width, centerY + barHeight * 0.5f),
+                            fade(IM_COL32(255, 255, 255, 0x40)), barHeight * 0.5f);
+        const float played = x + width * (*value);
+        if (played > x) {
+            draw->AddRectFilled(ImVec2(x, centerY - barHeight * 0.5f),
+                                ImVec2(played, centerY + barHeight * 0.5f),
+                                fade(IM_COL32(0xEC, 0x41, 0x41, 255)), barHeight * 0.5f);
+        }
+        if (hovered || active) {
+            draw->AddCircleFilled(ImVec2(played, centerY), px(5),
+                                  fade(IM_COL32(255, 255, 255, 255)), 16);
+        }
+        return deactivated;
+    };
 
-    const float coverSize = px(320.0f);
-    const float coverX = centerX - coverSize * 0.5f;
-    const float coverY = px(56.0f);
-    Ui::CoverImage(title, ImVec2(coverX, coverY), coverSize, px(16.0f), coverUrl, coverPath);
+    // ---------------- 左上角：时间 / 日期 ----------------
+    const std::time_t nowTime = std::time(nullptr);
+    std::tm localTime{};
+    localtime_s(&localTime, &nowTime);
+    static const char* kWeekNames[] = {"星期日", "星期一", "星期二", "星期三",
+                                       "星期四", "星期五", "星期六"};
+    char clockText[16];
+    std::snprintf(clockText, sizeof(clockText), "%02d:%02d", localTime.tm_hour, localTime.tm_min);
+    char dateText[48];
+    std::snprintf(dateText, sizeof(dateText), "%d月%d日 %s", localTime.tm_mon + 1,
+                  localTime.tm_mday, kWeekNames[localTime.tm_wday % 7]);
+    draw->AddText(Ui::GetFonts().xl, px(42), ImVec2(px(28), slideOffset + px(22)),
+                  fade(IM_COL32(255, 255, 255, 255)), clockText);
+    draw->AddText(Ui::GetFonts().small, px(15), ImVec2(px(28), slideOffset + px(74)),
+                  fade(IM_COL32(255, 255, 255, 0x99)), dateText);
 
-    const float textY = coverY + coverSize + px(26.0f);
-    Ui::TextEllipsis(title, px(760.0f), Ui::GetFonts().xl, Ui::Colors::Text,
-                     ImVec2(centerX - px(380.0f), textY));
-    const std::string artistShown = Ui::DisplayText(artist);
-    draw->AddText(Ui::GetFonts().body, px(18.0f),
-                  ImVec2(centerX - Ui::MeasureText(Ui::GetFonts().body, 18.0f, artistShown) * 0.5f,
-                         textY + px(48.0f)),
-                  Ui::Colors::Text2, artistShown.c_str());
+    // ---------------- 右上角按钮 ----------------
+    const float btnSize = px(40);
+    const float btnGap = px(8);
+    const float btnY = slideOffset + px(20);
+    const float rightEdge = width - px(20);
+    const float closeX = rightEdge - btnSize;
+    const float settingsX = closeX - btnGap - btnSize;
+    const float volumeX = settingsX - btnGap - btnSize;
+    const float modeX = volumeX - btnGap - btnSize;
+    const float fullscreenX = modeX - btnGap - btnSize;
+    uint32_t modeIcon = Icons::PlaylistPlay;
+    if (mode_ == 1) modeIcon = Icons::Repeat;
+    else if (mode_ == 2) modeIcon = Icons::RepeatOne;
+    else if (mode_ == 3) modeIcon = Icons::Shuffle;
+    const uint32_t volumeIcon = volume_ <= 0 ? Icons::VolumeOff
+                                             : (volume_ < 50 ? Icons::VolumeDown : Icons::VolumeUp);
+    const ImU32 buttonBackground = IM_COL32(0, 0, 0, 0x55);
+    if (roundButton("imm_fullscreen", immersiveFullscreen_ ? Icons::FullscreenExit : Icons::Fullscreen,
+                    fullscreenX, btnY, btnSize, px(20), immersiveFullscreen_, buttonBackground)) {
+        toggleImmersiveFullscreen();
+    }
+    if (roundButton("imm_mode", modeIcon, modeX, btnY, btnSize, px(20), false, buttonBackground)) {
+        mode_ = (mode_ + 1) % 4;
+        immersiveModeTip_ = formatModeName(mode_);
+        immersiveModeTipUntil_ = GetTickCount64() + 2000;
+        setStatus("播放模式：" + immersiveModeTip_);
+    }
+    if (roundButton("imm_volume", volumeIcon, volumeX, btnY, btnSize, px(20), immersiveVolumeOpen_,
+                    buttonBackground)) {
+        immersiveVolumeOpen_ = !immersiveVolumeOpen_;
+        immersiveBgMenuOpen_ = false;
+    }
+    if (roundButton("imm_bg", Icons::Settings, settingsX, btnY, btnSize, px(20), immersiveBgMenuOpen_,
+                    buttonBackground)) {
+        immersiveBgMenuOpen_ = !immersiveBgMenuOpen_;
+        immersiveVolumeOpen_ = false;
+    }
+    if (roundButton("imm_close", Icons::Close, closeX, btnY, btnSize, px(20), false,
+                    buttonBackground)) {
+        closeImmersive();
+    }
 
-    const float progressY = textY + px(96.0f);
-    static bool immerseSeeking = false;
-    static float immerseDraft = 0.0f;
+    // ---------------- 音量弹层 ----------------
+    if (immersiveVolumeOpen_) {
+        const float panelW = px(280);
+        const float panelH = px(46);
+        const ImVec2 pMin(width - px(20) - panelW, slideOffset + px(72));
+        const ImVec2 pMax(pMin.x + panelW, pMin.y + panelH);
+        draw->AddRectFilled(pMin, pMax, fade(IM_COL32(0x1C, 0x1C, 0x22, 0xEE)), px(12));
+        const std::string glyph = Icons::Utf8(volumeIcon);
+        draw->AddText(Ui::GetFonts().body, px(18),
+                      ImVec2(pMin.x + px(14), pMin.y + panelH * 0.5f - px(18) * 0.325f),
+                      fade(IM_COL32(255, 255, 255, 255)), glyph.c_str());
+        float value = volume_ / 100.0f;
+        bool volumeChanged = false;
+        const bool volumeFinished =
+            slider("##imm_volume_slider", pMin.x + px(46), pMin.y + panelH * 0.5f - px(7),
+                   panelW - px(46) - px(52), &value, px(4), &volumeChanged);
+        if (volumeChanged) {
+            volume_ = (int)std::lround(value * 100.0f);
+            volume_ = volume_ < 0 ? 0 : (volume_ > 100 ? 100 : volume_);
+            engine_.setVolume(volume_);
+        }
+        if (volumeFinished) bili_.setSetting("desktop.volume", std::to_string(volume_));
+        char volumeText[8];
+        std::snprintf(volumeText, sizeof(volumeText), "%d", volume_);
+        const float volumeTextWidth = Ui::MeasureText(Ui::GetFonts().small, px(15), volumeText);
+        draw->AddText(Ui::GetFonts().small, px(15),
+                      ImVec2(pMax.x - px(14) - volumeTextWidth,
+                             pMin.y + panelH * 0.5f - px(15) * 0.55f),
+                      fade(IM_COL32(255, 255, 255, 0xCC)), volumeText);
+    }
+
+    // ---------------- 背景设置弹层 ----------------
+    if (immersiveBgMenuOpen_) {
+        const float menuW = px(200);
+        const float rowH = px(34);
+        const ImVec2 mMin(width - px(20) - menuW, slideOffset + px(72));
+        const float menuH = rowH * 5 + px(1) + px(12);
+        draw->AddRectFilled(mMin, ImVec2(mMin.x + menuW, mMin.y + menuH),
+                            fade(IM_COL32(0x1C, 0x1C, 0x22, 0xEE)), px(12));
+        static const char* kBgLabels[3] = {"桌面壁纸", "自定义图片", "纯色"};
+        for (int i = 0; i < 3; ++i) {
+            const float rowY = mMin.y + px(6) + rowH * i;
+            ImGui::SetCursorScreenPos(ImVec2(mMin.x, rowY));
+            ImGui::PushID(i);
+            const bool clicked = ImGui::InvisibleButton("##bg_row", ImVec2(menuW, rowH));
+            const bool hovered = ImGui::IsItemHovered();
+            ImGui::PopID();
+            if (hovered) {
+                draw->AddRectFilled(ImVec2(mMin.x, rowY), ImVec2(mMin.x + menuW, rowY + rowH),
+                                    fade(IM_COL32(255, 255, 255, 0x14)));
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            }
+            const bool selected = immersiveBgMode_ == i;
+            draw->AddText(Ui::GetFonts().body, px(16),
+                          ImVec2(mMin.x + px(14), rowY + rowH * 0.5f - px(16) * 0.325f),
+                          fade(selected ? IM_COL32(0xEC, 0x41, 0x41, 255)
+                                        : IM_COL32(255, 255, 255, 0xE6)),
+                          kBgLabels[i]);
+            if (selected) {
+                draw->AddCircleFilled(ImVec2(mMin.x + menuW - px(16), rowY + rowH * 0.5f), px(3),
+                                      fade(IM_COL32(0xEC, 0x41, 0x41, 255)));
+            }
+            if (clicked) {
+                immersiveBgMode_ = i;
+                if (i == 1) pickImmersiveImage();
+                immersiveBgMenuOpen_ = false;
+            }
+        }
+        const float dividerY = mMin.y + px(6) + rowH * 3;
+        draw->AddLine(ImVec2(mMin.x, dividerY), ImVec2(mMin.x + menuW, dividerY),
+                      fade(IM_COL32(255, 255, 255, 0x33)), 1.0f);
+        const float waveRowY = dividerY + px(1);
+        ImGui::SetCursorScreenPos(ImVec2(mMin.x, waveRowY));
+        ImGui::PushID("wave_row");
+        const bool waveClicked = ImGui::InvisibleButton("##wave_row", ImVec2(menuW, rowH));
+        const bool waveHovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (waveHovered) {
+            draw->AddRectFilled(ImVec2(mMin.x, waveRowY), ImVec2(mMin.x + menuW, waveRowY + rowH),
+                                fade(IM_COL32(255, 255, 255, 0x14)));
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
+        draw->AddText(Ui::GetFonts().body, px(16),
+                      ImVec2(mMin.x + px(14), waveRowY + rowH * 0.5f - px(16) * 0.325f),
+                      fade(IM_COL32(255, 255, 255, 0xE6)),
+                      immersiveShowWave_ ? "隐藏律动线条" : "显示律动线条");
+        if (waveClicked) {
+            immersiveShowWave_ = !immersiveShowWave_;
+            immersiveBgMenuOpen_ = false;
+        }
+    }
+
+    // ---------------- 主内容 ----------------
+    const float coverSize = px(260);
+    const float coverY = slideOffset + height * 0.16f;
+    coverImage(currentTitle, width * 0.5f - coverSize * 0.5f, coverY, coverSize, px(20));
+
+    float textY = coverY + coverSize + px(34);
+    const std::string titleShown = Ui::DisplayText(currentTitle);
+    const float titleLimit = std::min(px(800), width - px(96));
+    const float titleWidth = Ui::MeasureText(Ui::GetFonts().xl, px(30), titleShown);
+    if (titleWidth <= titleLimit) {
+        draw->AddText(Ui::GetFonts().xl, px(30),
+                      ImVec2(width * 0.5f - titleWidth * 0.5f, textY),
+                      fade(IM_COL32(255, 255, 255, 255)), titleShown.c_str());
+    } else {
+        Ui::TextEllipsis(titleShown, titleLimit, Ui::GetFonts().xl, IM_COL32(255, 255, 255, 255),
+                         ImVec2(width * 0.5f - titleLimit * 0.5f, textY));
+    }
+    textY += px(40);
+    const std::string artistShown = Ui::DisplayText(currentArtist);
+    const float artistWidth = Ui::MeasureText(Ui::GetFonts().body, px(18), artistShown);
+    draw->AddText(Ui::GetFonts().body, px(18),
+                  ImVec2(width * 0.5f - artistWidth * 0.5f, textY),
+                  fade(IM_COL32(255, 255, 255, 0xB3)), artistShown.c_str());
+
+    // 进度条
+    const float progressY = textY + px(52);
+    const float progressWidth = px(560);
+    static bool immersiveSeeking = false;
+    static float immersiveSeekDraft = 0.0f;
     const float ratio = durationMs_ > 0.0 ? (float)(positionMs_ / durationMs_) : 0.0f;
-    const float progressWidth = px(560.0f);
-    ImGui::SetCursorPos(ImVec2(centerX - progressWidth * 0.5f, progressY));
-    float sliderValue = immerseSeeking ? immerseDraft
-                                       : (ratio < 0.0f ? 0.0f : (ratio > 1.0f ? 1.0f : ratio));
-    const Ui::SliderResult seekResult =
-        Ui::ThinSlider("##immerse_seek", &sliderValue, progressWidth, px(14.0f), px(5.0f),
-                       Ui::Colors::Brand);
-    if (seekResult.changed) {
-        immerseSeeking = true;
-        immerseDraft = sliderValue;
+    float sliderValue = immersiveSeeking ? immersiveSeekDraft
+                                         : (ratio < 0.0f ? 0.0f : (ratio > 1.0f ? 1.0f : ratio));
+    bool seekChanged = false;
+    const bool seekFinished =
+        slider("##immerse_seek", width * 0.5f - progressWidth * 0.5f, progressY, progressWidth,
+               &sliderValue, px(4), &seekChanged);
+    if (seekChanged) {
+        immersiveSeeking = true;
+        immersiveSeekDraft = sliderValue;
     }
-    if (seekResult.finished) {
-        immerseSeeking = false;
-        engine_.seekMs((int64_t)(sliderValue * durationMs_));
+    if (seekFinished) {
+        immersiveSeeking = false;
+        if (durationMs_ > 0.0) engine_.seekMs((int64_t)(sliderValue * durationMs_));
     }
-    auto formatTime = [](double ms) {
-        if (ms < 0.0) ms = 0.0;
-        const int64_t totalSeconds = (int64_t)(ms / 1000.0);
+    auto formatMs = [](double ms) {
+        const int64_t total = (int64_t)((ms < 0.0 ? 0.0 : ms) / 1000.0);
         char buffer[32];
-        std::snprintf(buffer, sizeof(buffer), "%lld:%02lld", (long long)(totalSeconds / 60),
-                      (long long)(totalSeconds % 60));
+        std::snprintf(buffer, sizeof(buffer), "%lld:%02lld", (long long)(total / 60),
+                      (long long)(total % 60));
         return std::string(buffer);
     };
-    const double shownPosition = immerseSeeking ? immerseDraft * durationMs_ : positionMs_;
-    draw->AddText(Ui::GetFonts().small, px(15.0f),
-                  ImVec2(centerX - progressWidth * 0.5f, progressY + px(22.0f)),
-                  Ui::Colors::Text3, formatTime(shownPosition).c_str());
-    const std::string durationText = formatTime(durationMs_);
-    draw->AddText(Ui::GetFonts().small, px(15.0f),
-                  ImVec2(centerX + progressWidth * 0.5f -
-                             Ui::MeasureText(Ui::GetFonts().small, 15.0f, durationText),
-                         progressY + px(22.0f)),
-                  Ui::Colors::Text3, durationText.c_str());
+    const double shownPosition = immersiveSeeking ? immersiveSeekDraft * durationMs_ : positionMs_;
+    const float timeRowY = progressY + px(26);
+    draw->AddText(Ui::GetFonts().small, px(15),
+                  ImVec2(width * 0.5f - progressWidth * 0.5f, timeRowY),
+                  fade(IM_COL32(255, 255, 255, 0xCC)),
+                  (formatMs(shownPosition) + " / " + formatMs(durationMs_)).c_str());
+    const uint64_t nowTick = GetTickCount64();
+    const uint64_t listenedMs = nowTick > immersiveEnteredTick_ ? nowTick - immersiveEnteredTick_ : 0;
+    const std::time_t enteredSystemTime = nowTime - (std::time_t)(listenedMs / 1000);
+    std::tm enteredTm{};
+    localtime_s(&enteredTm, &enteredSystemTime);
+    char enteredText[64];
+    if (listenedMs < 60000) {
+        std::snprintf(enteredText, sizeof(enteredText), "%02d:%02d 进入 · 已听 %d 秒",
+                      enteredTm.tm_hour, enteredTm.tm_min, (int)(listenedMs / 1000));
+    } else {
+        std::snprintf(enteredText, sizeof(enteredText), "%02d:%02d 进入 · 已听 %d 分钟",
+                      enteredTm.tm_hour, enteredTm.tm_min, (int)(listenedMs / 60000));
+    }
+    const float enteredWidth = Ui::MeasureText(Ui::GetFonts().small, px(15), enteredText);
+    draw->AddText(Ui::GetFonts().small, px(15),
+                  ImVec2(width * 0.5f + progressWidth * 0.5f - enteredWidth, timeRowY),
+                  fade(IM_COL32(255, 255, 255, 0x99)), enteredText);
 
-    const float controlsY = progressY + px(62.0f);
-    ImGui::SetCursorPos(ImVec2(centerX - px(120.0f), controlsY));
-    if (Ui::IconButton("immerse_prev", Icons::SkipPrevious, px(44.0f), px(26.0f),
-                       Ui::Colors::Text, false, hasMedia_, "上一首")) {
+    // 播放控制
+    const float controlsCenterY = timeRowY + px(48);
+    const float playSize = px(58);
+    if (roundButton("immerse_prev", Icons::SkipPrevious, width * 0.5f - px(29) - px(16) - px(56),
+                    controlsCenterY - px(28), px(56), px(26), false, IM_COL32(0, 0, 0, 0))) {
         playPrevious();
     }
-    ImGui::SetCursorPos(ImVec2(centerX - px(24.0f), controlsY - px(8.0f)));
-    if (Ui::PlayCircleButton("immerse_play", playing_, px(48.0f))) togglePlayback();
-    ImGui::SetCursorPos(ImVec2(centerX + px(76.0f), controlsY));
-    if (Ui::IconButton("immerse_next", Icons::SkipNext, px(44.0f), px(26.0f),
-                       Ui::Colors::Text, false, hasMedia_, "下一首")) {
+    if (playButton("immerse_play", width * 0.5f, controlsCenterY, playSize)) togglePlayback();
+    if (roundButton("immerse_next", Icons::SkipNext, width * 0.5f + px(29) + px(16),
+                    controlsCenterY - px(28), px(56), px(26), false, IM_COL32(0, 0, 0, 0))) {
         playNext();
     }
 
-    ImGui::SetCursorPos(ImVec2(width - px(60.0f), px(20.0f)));
-    if (Ui::IconButton("immerse_exit", Icons::FullscreenExit, px(36.0f), px(20.0f),
-                       Ui::Colors::Text2, false, true, "退出沉浸模式（Esc）")) {
-        toggleImmersive();
+    const float tipY = controlsCenterY + playSize * 0.5f + px(10);
+    if (!immersiveModeTip_.empty() && GetTickCount64() < immersiveModeTipUntil_) {
+        const float tipWidth = Ui::MeasureText(Ui::GetFonts().small, px(14), immersiveModeTip_);
+        draw->AddText(Ui::GetFonts().small, px(14),
+                      ImVec2(width * 0.5f - tipWidth * 0.5f, tipY),
+                      fade(IM_COL32(255, 255, 255, 0x99)), immersiveModeTip_.c_str());
     }
 
-    const std::string hint = "F11 / Esc 退出沉浸模式";
-    draw->AddText(Ui::GetFonts().small, px(15.0f),
-                  ImVec2(centerX - Ui::MeasureText(Ui::GetFonts().small, 15.0f, hint) * 0.5f,
-                         height - px(34.0f)),
-                  Ui::Colors::Text3, hint.c_str());
+    // ---------------- 底部律动线条 ----------------
+    if (immersiveShowWave_) {
+        static float waveLevel = 0.0f;
+        const float targetLevel = playing_ ? 1.0f : 0.0f;
+        waveLevel += (targetLevel - waveLevel) * std::min(1.0f, delta * 3.5f);
+        const int bars = 56;
+        const float gap = px(3);
+        const float areaWidth = std::min(px(700), width * 0.7f);
+        const float barWidth = (areaWidth - gap * (bars - 1)) / (float)bars;
+        const float left = (width - areaWidth) * 0.5f;
+        const float waveHeight = px(90);
+        const float waveBottom = slideOffset + height - px(26);
+        const double timeSeconds = ImGui::GetTime();
+        for (int i = 0; i < bars; ++i) {
+            const float wobble =
+                0.35f + 0.65f * (0.5f + 0.5f * std::sin((float)timeSeconds * (2.2f + (i % 7) * 0.13f) +
+                                                       i * 0.7f));
+            const float amplitude = 0.06f + 0.94f * waveLevel * wobble;
+            const float barH = std::max(px(1), waveHeight * amplitude);
+            const float x = left + i * (barWidth + gap);
+            draw->AddRectFilled(ImVec2(x, waveBottom - barH), ImVec2(x + barWidth, waveBottom),
+                                fadeImColor(IM_COL32(0xEC, 0x41, 0x41, 255),
+                                            0.30f + 0.60f * amplitude),
+                                barWidth * 0.5f);
+        }
+    }
+
+    // 滚轮微调音量（沉浸模式里没有常驻音量条）
+    if (io.MouseWheel != 0.0f) {
+        const int next = std::max(0, std::min(100, volume_ + (int)std::lround(io.MouseWheel)));
+        if (next != volume_) {
+            volume_ = next;
+            engine_.setVolume(volume_);
+            bili_.setSetting("desktop.volume", std::to_string(volume_));
+        }
+    }
+
+    // 鼠标空闲 3 秒隐藏光标
+    static ImVec2 lastMousePos(-1.0f, -1.0f);
+    static double lastMouseMoveTime = 0.0;
+    if (io.MousePos.x != lastMousePos.x || io.MousePos.y != lastMousePos.y) {
+        lastMousePos = io.MousePos;
+        lastMouseMoveTime = ImGui::GetTime();
+    }
+    if (ImGui::GetTime() - lastMouseMoveTime > 3.0) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    }
+
 }
 
 void App::togglePlayback() {
@@ -2072,10 +2510,23 @@ void App::draw() {
 
     ImGuiIO& io = ImGui::GetIO();
 
-    // 窗口内快捷键：空格 = 播放/暂停，←/→（或 [ ]）= 切歌，F11 = 沉浸模式，Esc = 退出沉浸
-    if (ImGui::IsKeyPressed(ImGuiKey_F11, false)) toggleImmersive();
-    if (immersive_ && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) toggleImmersive();
-    if (!io.WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+    // 沉浸模式快捷键（Java 版对齐）：空格 播放/暂停、[ ] 切歌、Esc 退出、F11 全屏切换
+    if (immersiveOpen_) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) closeImmersive();
+        if (ImGui::IsKeyPressed(ImGuiKey_F11, false)) toggleImmersiveFullscreen();
+        if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) togglePlayback();
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
+            playPrevious();
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+            playNext();
+        }
+    }
+    // 窗口内快捷键：空格 = 播放/暂停，←/→（或 [ ]）= 切歌，F11 = 全屏
+    if (!immersiveOpen_ && ImGui::IsKeyPressed(ImGuiKey_F11, false)) toggleImmersiveFullscreen();
+    if (!immersiveOpen_ && !io.WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) togglePlayback();
         if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) ||
             ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
@@ -2099,7 +2550,7 @@ void App::draw() {
                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
     ImGui::Begin("##root", nullptr, rootFlags);
 
-    if (immersive_) {
+    if (immersiveOpen_ || immersiveClosing_) {
         drawImmersive();
         ImGui::End();
         return;
@@ -2107,7 +2558,7 @@ void App::draw() {
 
     const bool maximized = Ui::WindowIsMaximized(window_);
     ImGui::SetCursorPos(ImVec2(0, 0));
-    if (Ui::DrawTitleBar(window_, maximized, immersive_)) toggleImmersive();
+    Ui::DrawTitleBar(window_, maximized);
 
     // ---------------- 侧栏 ----------------
     ImGui::SetCursorPos(ImVec2(0, titleBarHeight));
@@ -2159,7 +2610,7 @@ void App::draw() {
     playBarData.qualityId = qualityId_;
     playBarData.qualityLabel =
         qualityNameForId(lastStreamQualityId_ > 0 ? lastStreamQualityId_ : qualityId_);
-    playBarData.immersive = immersive_;
+    playBarData.immersive = immersiveOpen_;
     Ui::PlayBarActions playBarActions;
     Ui::DrawPlayBar(playBarData, &playBarActions, io.DisplaySize.x, playerHeight);
     ImGui::EndChild();
@@ -2277,5 +2728,5 @@ void App::draw() {
         refreshOutputDevices();
         outputDeviceDialogRequested_ = true;
     }
-    if (playBarActions.toggleImmersive) toggleImmersive();
+    if (playBarActions.toggleImmersive) openImmersive();
 }

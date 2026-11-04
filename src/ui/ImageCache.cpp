@@ -17,10 +17,15 @@
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <map>
 #include <mutex>
+#include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -192,6 +197,162 @@ void ClearImageCache() {
         }
     }
     gEntries.clear();
+}
+
+
+namespace {
+
+std::wstring readWallpaperPathW() {
+    DWORD type = 0;
+    DWORD size = 0;
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", L"WallPaper", RRF_RT_REG_SZ,
+                     &type, nullptr, &size) != ERROR_SUCCESS ||
+        size == 0) {
+        return {};
+    }
+    std::vector<wchar_t> buffer(size / sizeof(wchar_t) + 1, 0);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", L"WallPaper", RRF_RT_REG_SZ,
+                     &type, buffer.data(), &size) != ERROR_SUCCESS) {
+        return {};
+    }
+    return std::wstring(buffer.data());
+}
+
+std::string wideToUtf8Local(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int size =
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0, nullptr, nullptr);
+    std::string out((size_t)size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), out.data(), size, nullptr,
+                        nullptr);
+    return out;
+}
+
+unsigned char* loadDownscaled(const std::vector<unsigned char>& bytes, int maxWidth, int* outWidth,
+                              int* outHeight) {
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    unsigned char* pixels =
+        stbi_load_from_memory(bytes.data(), (int)bytes.size(), &width, &height, &channels, 4);
+    if (pixels == nullptr) return nullptr;
+    if (width <= maxWidth) {
+        *outWidth = width;
+        *outHeight = height;
+        return pixels;
+    }
+    const float scale = (float)maxWidth / (float)width;
+    int newWidth = maxWidth;
+    int newHeight = (int)(height * scale);
+    if (newHeight < 1) newHeight = 1;
+    auto* scaled = (unsigned char*)malloc((size_t)newWidth * newHeight * 4);
+    for (int y = 0; y < newHeight; ++y) {
+        const int srcY = (int)(y / scale);
+        for (int x = 0; x < newWidth; ++x) {
+            const int srcX = (int)(x / scale);
+            memcpy(scaled + ((size_t)y * newWidth + x) * 4,
+                   pixels + ((size_t)srcY * width + srcX) * 4, 4);
+        }
+    }
+    stbi_image_free(pixels);
+    *outWidth = newWidth;
+    *outHeight = newHeight;
+    return scaled;
+}
+
+void boxBlurPass(unsigned char* rgba, int width, int height, int radius) {
+    std::vector<unsigned char> temp((size_t)width * height * 4);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const int x0 = std::max(0, x - radius);
+            const int x1 = std::min(width - 1, x + radius);
+            int count = x1 - x0 + 1;
+            int sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+            for (int sx = x0; sx <= x1; ++sx) {
+                const unsigned char* src = rgba + ((size_t)y * width + sx) * 4;
+                sumR += src[0];
+                sumG += src[1];
+                sumB += src[2];
+                sumA += src[3];
+            }
+            unsigned char* dst = temp.data() + ((size_t)y * width + x) * 4;
+            dst[0] = (unsigned char)(sumR / count);
+            dst[1] = (unsigned char)(sumG / count);
+            dst[2] = (unsigned char)(sumB / count);
+            dst[3] = (unsigned char)(sumA / count);
+        }
+    }
+    for (int x = 0; x < width; ++x) {
+        for (int y = 0; y < height; ++y) {
+            const int y0 = std::max(0, y - radius);
+            const int y1 = std::min(height - 1, y + radius);
+            int count = y1 - y0 + 1;
+            int sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+            for (int sy = y0; sy <= y1; ++sy) {
+                const unsigned char* src = temp.data() + ((size_t)sy * width + x) * 4;
+                sumR += src[0];
+                sumG += src[1];
+                sumB += src[2];
+                sumA += src[3];
+            }
+            unsigned char* dst = rgba + ((size_t)y * width + x) * 4;
+            dst[0] = (unsigned char)(sumR / count);
+            dst[1] = (unsigned char)(sumG / count);
+            dst[2] = (unsigned char)(sumB / count);
+            dst[3] = (unsigned char)(sumA / count);
+        }
+    }
+}
+
+ImTextureID makeBlurredTexture(const std::string& path, const std::string& cacheKey) {
+    static std::map<std::string, ImTextureID> cache;
+    static std::set<std::string> failed;
+    auto it = cache.find(cacheKey);
+    if (it != cache.end()) return it->second;
+    if (failed.count(cacheKey) != 0) return (ImTextureID)0;
+    const std::vector<unsigned char> bytes = readWholeFile(path);
+    if (bytes.empty()) {
+        failed.insert(cacheKey);
+        return (ImTextureID)0;
+    }
+    int width = 0;
+    int height = 0;
+    unsigned char* pixels = loadDownscaled(bytes, 1280, &width, &height);
+    if (pixels == nullptr) {
+        failed.insert(cacheKey);
+        return (ImTextureID)0;
+    }
+    const int radius = std::max(4, std::min(24, std::min(width, height) / 60));
+    boxBlurPass(pixels, width, height, radius);
+    boxBlurPass(pixels, width, height, radius);
+
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    free(pixels);
+    cache[cacheKey] = (ImTextureID)(intptr_t)texture;
+    AppLog::info("ImageCache", "模糊背景纹理 " + std::to_string(width) + "x" +
+                                   std::to_string(height) + " " + path);
+    return cache[cacheKey];
+}
+
+}  // namespace
+
+ImTextureID BlurredWallpaperTexture() {
+    const std::wstring path = readWallpaperPathW();
+    if (path.empty()) return (ImTextureID)0;
+    const std::string utf8 = wideToUtf8Local(path);
+    return makeBlurredTexture(utf8, "wallpaper:" + utf8);
+}
+
+ImTextureID BlurredImageTexture(const std::string& path) {
+    if (path.empty()) return (ImTextureID)0;
+    return makeBlurredTexture(path, "image:" + path);
 }
 
 }  // namespace Ui

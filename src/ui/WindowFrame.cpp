@@ -21,7 +21,7 @@ WNDPROC g_oldProc = nullptr;
 
 constexpr int kResizeBorder = 6;
 constexpr int kTitleBarHeight = 36;
-constexpr int kTitleBarButtonsWidth = 46 * 4;  // 沉浸模式按钮 + 最小化/最大化/关闭
+constexpr int kTitleBarButtonsWidth = 46 * 3;
 
 LRESULT CALLBACK WindowFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {

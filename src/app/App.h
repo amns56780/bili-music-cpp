@@ -136,7 +136,10 @@ private:
     void checkSleepTimer();
     void refreshOutputDevices();
     void applyOutputDevice(const std::string& id);
-    void toggleImmersive();
+    void openImmersive();
+    void closeImmersive();
+    void toggleImmersiveFullscreen();
+    void pickImmersiveImage();
     void drawImmersive();
     void startDownloadCurrent();
     void prefetchNextSong();
@@ -274,7 +277,19 @@ private:
     bool outputDeviceDialogRequested_ = false;
     std::vector<std::pair<std::string, std::string>> outputDevices_;  // id, 名称
     std::string selectedOutputDeviceId_;
-    bool immersive_ = false;
+    // 沉浸模式（对齐 Java Immersive.kt：点击播放条封面自下而上滑入，背景默认桌面壁纸模糊）
+    bool immersiveOpen_ = false;
+    bool immersiveClosing_ = false;
+    float immersiveAnim_ = 0.0f;
+    bool immersiveFullscreen_ = false;
+    int immersiveBgMode_ = 0;  // 0=桌面壁纸 1=自定义图片 2=纯色
+    std::string immersiveBgPath_;
+    bool immersiveShowWave_ = true;
+    bool immersiveVolumeOpen_ = false;
+    bool immersiveBgMenuOpen_ = false;
+    uint64_t immersiveEnteredTick_ = 0;
+    std::string immersiveModeTip_;
+    uint64_t immersiveModeTipUntil_ = 0;
     int savedWindowX_ = 0;
     int savedWindowY_ = 0;
     int savedWindowW_ = 1240;

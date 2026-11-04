@@ -54,7 +54,7 @@ void drawWindowButtonGlyph(ImDrawList* draw, ImVec2 center, WindowButtonKind kin
 
 }  // namespace
 
-bool DrawTitleBar(GLFWwindow* window, bool maximized, bool immersive) {
+void DrawTitleBar(GLFWwindow* window, bool maximized) {
     const float height = Dimens::TitleBarHeight;
     const float buttonWidth = Dimens::TitleBarButtonWidth;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -74,30 +74,6 @@ bool DrawTitleBar(GLFWwindow* window, bool maximized, bool immersive) {
     // 拖动和双击最大化交给系统（WM_NCHITTEST 返回 HTCAPTION，见 WindowFrame.cpp）：
     // 原生 modal 拖动由 DWM 直接搬窗口，UI 线程完全不参与，不会像 Java 版那样一卡一卡。
     // 这里只负责右侧三个窗口按钮（该区域 WM_NCHITTEST 返回 HTCLIENT，仍然走 ImGui 点击）。
-
-    // 沉浸模式按钮（在三个窗口按钮左边）
-    bool immersiveClicked = false;
-    {
-        const float immersiveX = origin.x + width - buttonWidth * 4.0f;
-        ImGui::SetCursorScreenPos(ImVec2(immersiveX, origin.y));
-        ImGui::PushID("immersive_btn");
-        const bool pressed = ImGui::InvisibleButton("##immersive", ImVec2(buttonWidth, height));
-        const bool hovered = ImGui::IsItemHovered();
-        if (hovered) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-            draw->AddRectFilled(ImVec2(immersiveX, origin.y),
-                                ImVec2(immersiveX + buttonWidth, origin.y + height),
-                                Colors::WindowBtnHover);
-        }
-        const std::string glyph =
-            Icons::Utf8(immersive ? Icons::FullscreenExit : Icons::Fullscreen);
-        draw->AddText(GetFonts().body, 18.0f,
-                      ImVec2(immersiveX + buttonWidth * 0.5f - 18.0f * 0.5f,
-                             origin.y + height * 0.5f - 18.0f * 0.325f),
-                      hovered ? Colors::White : Colors::WindowBtnIcon, glyph.c_str());
-        if (pressed) immersiveClicked = true;
-        ImGui::PopID();
-    }
 
     // 右侧：最小化 / 最大化(还原) / 关闭
     const WindowButtonKind kinds[3] = { WindowButtonKind::Minimize,
@@ -133,7 +109,6 @@ bool DrawTitleBar(GLFWwindow* window, bool maximized, bool immersive) {
 
     // 恢复到内容游标（标题栏下面的区域从 y = height 开始）
     ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height));
-    return immersiveClicked;
 }
 
 }  // namespace Ui

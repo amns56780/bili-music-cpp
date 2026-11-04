@@ -15,6 +15,10 @@ ImTextureID CoverTextureFor(const std::string& coverUrl, const std::string& cove
 // 查询纹理原始像素尺寸（用于按 Java 版 ContentScale.Crop 居中裁切）
 bool CoverTextureSize(ImTextureID texture, int* width, int* height);
 
+// 沉浸模式背景：桌面壁纸 / 指定图片，做高斯近似模糊后返回纹理（失败返回 0）
+ImTextureID BlurredWallpaperTexture();
+ImTextureID BlurredImageTexture(const std::string& path);
+
 // 主线程每帧调用：把后台下载完成的字节上传成 OpenGL 纹理
 void PumpImageCache();
 
