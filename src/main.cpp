@@ -20,6 +20,7 @@
 #include "bili/BiliService.h"
 #include "media/AppVolume.h"
 #include "media/VlcEngine.h"
+#include "ui/AppIcon.h"
 #include "ui/WindowFrame.h"
 
 namespace {
@@ -193,6 +194,17 @@ int main(int argc, char** argv) {
         glfwTerminate();
         return 1;
     }
+    // 和 Java 版同款应用图标（任务栏 / Alt+Tab / 窗口图标）
+    {
+        GLFWimage images[Ui::AppIcon::kImageCount];
+        for (int i = 0; i < Ui::AppIcon::kImageCount; ++i) {
+            images[i].width = Ui::AppIcon::kImages[i].width;
+            images[i].height = Ui::AppIcon::kImages[i].height;
+            images[i].pixels = const_cast<unsigned char*>(Ui::AppIcon::kImages[i].pixels);
+        }
+        glfwSetWindowIcon(window, Ui::AppIcon::kImageCount, images);
+    }
+
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     glfwSetWindowSizeLimits(window, 1000, 640, GLFW_DONT_CARE, GLFW_DONT_CARE);

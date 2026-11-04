@@ -63,6 +63,7 @@ struct ImportedSongsResult {
     std::vector<ImportedSong> songs;
     std::string message;
     int total = 0;
+    std::string suggestedTitle;  // UP 主昵称 / 合集标题（用于建歌单）
 };
 
 using ImportProgressFn = std::function<void(const std::string& text, int current, int total)>;
@@ -109,6 +110,8 @@ public:
     std::vector<FavFolder> favFolders(long long mid, std::string* error);
     ImportedSongsResult importFavFolder(long long mediaId, const ImportProgressFn& progress);
     ImportedSongsResult importToView(const ImportProgressFn& progress);
+    ImportedSongsResult importSpaceUploads(long long mid, const ImportProgressFn& progress);
+    ImportedSongsResult importSeason(long long seasonId, const ImportProgressFn& progress);
     // 收藏夹/投稿列表不带 cid，逐条用 view 接口补齐（合集/toview 自带 cid 则跳过）
     void resolveCids(std::vector<ImportedSong>* songs, const ImportProgressFn& progress);
 

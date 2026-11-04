@@ -79,6 +79,14 @@ if (WIN32)
     target_link_libraries(bilimusic PRIVATE comdlg32 shell32 ole32 uuid user32 gdi32 winhttp)
 endif()
 
+# Windows exe 图标资源（与 Java 版同款 bilimusic.ico）
+if (WIN32)
+    enable_language(RC)
+    set(APP_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/icons/bilimusic.ico")
+    configure_file(src/resources/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
+    target_sources(bilimusic PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
+endif()
+
 # 图标字体在运行时加载：复制到 exe 旁边的 assets/（和 Java 版把资源打进 jar 等价）
 add_custom_command(TARGET bilimusic POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:bilimusic>/assets"

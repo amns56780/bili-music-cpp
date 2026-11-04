@@ -868,4 +868,179 @@ void BiliService::resolveCids(std::vector<ImportedSong>* songs, const ImportProg
     *songs = std::move(resolved);
 }
 
+namespace {
+
+int64_t parseDurationText(const std::string& text) {
+    if (text.empty()) return 0;
+    int64_t total = 0;
+    int64_t current = 0;
+    for (char c : text) {
+        if (c >= '0' && c <= '9') {
+            current = current * 10 + (c - '0');
+        } else if (c == ':') {
+            total = total * 60 + current;
+            current = 0;
+        }
+    }
+    total = total * 60 + current;
+    return total * 1000;
+}
+
+}  // namespace
+
+ImportedSongsResult BiliService::importSpaceUploads(long long mid,
+                                                   const ImportProgressFn& progress) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    ImportedSongsResult result;
+    // 先取 UP 主昵称（拿不到就用「UP主 mid」）
+    {
+        net::HttpResponse response;
+        std::string httpError;
+        const std::string url =
+            "https://api.bilibili.com/x/web-interface/card?mid=" + std::to_string(mid);
+        if (net::httpGet(url, apiHeaders(cookieHeader()), &response, &httpError)) {
+            try {
+                const nlohmann::json root = nlohmann::json::parse(response.body);
+                if (root.value("code", -1) == 0) {
+                    const nlohmann::json data = root.value("data", nlohmann::json::object());
+                    const nlohmann::json card = data.value("card", nlohmann::json::object());
+                    result.suggestedTitle = card.value("name", std::string());
+                }
+            } catch (const std::exception&) {
+            }
+        }
+    }
+    if (result.suggestedTitle.empty()) {
+        result.suggestedTitle = "UP主 " + std::to_string(mid);
+    }
+    const std::string name = result.suggestedTitle;
+
+    int page = 1;
+    constexpr int kMaxPages = 50;
+    while (page <= kMaxPages) {
+        std::map<std::string, std::string> params = {
+            {"mid", std::to_string(mid)},
+            {"pn", std::to_string(page)},
+            {"ps", "30"},
+            {"order", "pubdate"},
+            {"platform", "web"},
+            {"web_location", "1550101"},
+        };
+        net::HttpResponse response;
+        std::string httpError;
+        if (!net::httpGet(joinUrl("https://api.bilibili.com/x/space/wbi/arc/search?",
+                                 signParams(params, ensureMixinKey(false))),
+                          apiHeaders(cookieHeader()), &response, &httpError)) {
+            result.message = httpError;
+            return result;
+        }
+        try {
+            const nlohmann::json root = nlohmann::json::parse(response.body);
+            const int code = root.value("code", -1);
+            if (code != 0) {
+                result.message = std::string("UP主投稿返回 code=") + std::to_string(code) + " " +
+                                 root.value("message", std::string());
+                return result;
+            }
+            const nlohmann::json data = root.value("data", nlohmann::json::object());
+            const nlohmann::json pageInfo = data.value("page", nlohmann::json::object());
+            result.total = pageInfo.value("count", result.total);
+            const nlohmann::json list = data.value("list", nlohmann::json::object());
+            const nlohmann::json vlist = list.value("vlist", nlohmann::json::array());
+            if (vlist.empty()) break;
+            for (const auto& item : vlist) {
+                ImportedSong song;
+                song.bvid = item.value("bvid", std::string());
+                if (song.bvid.empty()) continue;
+                song.title = item.value("title", std::string());
+                song.coverUrl = item.value("pic", std::string());
+                song.artist = name;
+                song.durationMs = parseDurationText(item.value("length", std::string()));
+                result.songs.push_back(std::move(song));
+            }
+            if (progress) {
+                progress("正在导入「" + name + "」的投稿：已读取 " +
+                             std::to_string(result.songs.size()) + " 首",
+                         (int)result.songs.size(),
+                         result.total > 0 ? result.total : (int)result.songs.size());
+            }
+            ++page;
+        } catch (const std::exception& exception) {
+            result.message = std::string("UP主投稿解析失败：") + exception.what();
+            return result;
+        }
+    }
+    resolveCids(&result.songs, progress);
+    result.ok = true;
+    result.message = "取到 " + std::to_string(result.songs.size()) + " 首";
+    return result;
+}
+
+ImportedSongsResult BiliService::importSeason(long long seasonId, const ImportProgressFn& progress) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    ImportedSongsResult result;
+    int page = 1;
+    constexpr int kMaxPages = 50;
+    while (page <= kMaxPages) {
+        std::map<std::string, std::string> params = {
+            {"season_id", std::to_string(seasonId)},
+            {"page_num", std::to_string(page)},
+            {"page_size", "30"},
+        };
+        net::HttpResponse response;
+        std::string httpError;
+        if (!net::httpGet(joinUrl("https://api.bilibili.com/x/polymer/web-space/seasons_archives_list?",
+                                 signParams(params, ensureMixinKey(false))),
+                          apiHeaders(cookieHeader()), &response, &httpError)) {
+            result.message = httpError;
+            return result;
+        }
+        try {
+            const nlohmann::json root = nlohmann::json::parse(response.body);
+            const int code = root.value("code", -1);
+            if (code != 0) {
+                result.message = std::string("合集接口返回 code=") + std::to_string(code) + " " +
+                                 root.value("message", std::string());
+                return result;
+            }
+            const nlohmann::json data = root.value("data", nlohmann::json::object());
+            const nlohmann::json meta = data.value("meta", nlohmann::json::object());
+            if (result.suggestedTitle.empty()) {
+                result.suggestedTitle = meta.value("name", std::string());
+            }
+            const nlohmann::json pageInfo = data.value("page", nlohmann::json::object());
+            result.total = pageInfo.value("total", result.total);
+            const nlohmann::json archives = data.value("archives", nlohmann::json::array());
+            if (archives.empty()) break;
+            for (const auto& item : archives) {
+                ImportedSong song;
+                song.bvid = item.value("bvid", std::string());
+                // 合集接口不返回 cid，先占位，循环结束后统一用 view 接口补齐
+                song.cid = item.value("cid", (int64_t)0);
+                if (song.bvid.empty()) continue;
+                song.title = item.value("title", std::string());
+                song.coverUrl = item.value("pic", std::string());
+                song.durationMs = (int64_t)item.value("duration", 0) * 1000;
+                song.artist = result.suggestedTitle;
+                result.songs.push_back(std::move(song));
+            }
+            if (progress) {
+                progress("正在导入合集「" + result.suggestedTitle + "」：" +
+                             std::to_string(result.songs.size()) + " 首",
+                         (int)result.songs.size(),
+                         result.total > 0 ? result.total : (int)result.songs.size());
+            }
+            ++page;
+        } catch (const std::exception& exception) {
+            result.message = std::string("合集解析失败：") + exception.what();
+            return result;
+        }
+    }
+    if (result.suggestedTitle.empty()) result.suggestedTitle = "合集 " + std::to_string(seasonId);
+    resolveCids(&result.songs, progress);
+    result.ok = true;
+    result.message = "取到 " + std::to_string(result.songs.size()) + " 首";
+    return result;
+}
+
 }  // namespace bili

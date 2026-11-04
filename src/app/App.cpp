@@ -104,6 +104,60 @@ void drawQrCode(const util::QrMatrix& matrix, ImVec2 topLeft, float targetSize) 
     }
 }
 
+// 从「纯数字 / 空间主页链接 / 合集链接」里解析 id
+long long parseIdAfter(const std::string& input, const char* marker) {
+    const std::string key(marker);
+    const size_t pos = input.find(key);
+    if (pos == std::string::npos) return 0;
+    size_t begin = pos + key.size();
+    size_t end = begin;
+    while (end < input.size() && input[end] >= '0' && input[end] <= '9') ++end;
+    if (end == begin) return 0;
+    try {
+        return std::stoll(input.substr(begin, end - begin));
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+bool isAllDigitsString(const std::string& text) {
+    if (text.empty()) return false;
+    for (char c : text) {
+        if (c < '0' || c > '9') return false;
+    }
+    return true;
+}
+
+long long parseSpaceMidInput(const std::string& rawInput) {
+    const std::string input = rawInput;
+    if (isAllDigitsString(input)) {
+        try {
+            return std::stoll(input);
+        } catch (const std::exception&) {
+            return 0;
+        }
+    }
+    long long mid = parseIdAfter(input, "space.bilibili.com/");
+    if (mid > 0) return mid;
+    return parseIdAfter(input, "uid=");
+}
+
+long long parseSeasonIdInput(const std::string& rawInput) {
+    const std::string input = rawInput;
+    if (isAllDigitsString(input)) {
+        try {
+            return std::stoll(input);
+        } catch (const std::exception&) {
+            return 0;
+        }
+    }
+    long long id = parseIdAfter(input, "season_id=");
+    if (id > 0) return id;
+    id = parseIdAfter(input, "/lists/");
+    if (id > 0) return id;
+    return parseIdAfter(input, "seasonId=");
+}
+
 std::string formatModeName(int mode) {
     switch (mode) {
         case 0: return "顺序播放";
@@ -666,6 +720,32 @@ void App::handleConflictChoice(int choice) {
         return;
     }
 
+    if (action == ConflictAction::ImportPending) {
+        if (!pendingImportedValid_) return;
+        std::vector<StoredSong> songs;
+        songs.reserve(pendingImportedResult_.songs.size());
+        for (const bili::ImportedSong& imported : pendingImportedResult_.songs) {
+            StoredSong song;
+            song.bvid = imported.bvid;
+            song.cid = imported.cid;
+            song.title = imported.title;
+            song.artist = imported.artist;
+            song.coverUrl = imported.coverUrl;
+            song.durationMs = imported.durationMs;
+            songs.push_back(std::move(song));
+        }
+        const int64_t id =
+            choice == 0
+                ? store_.createPlaylistOverwriting(desired, pendingImportedSourceType_,
+                                                   pendingImportedTitle_)
+                : store_.createPlaylist(desired, pendingImportedSourceType_, pendingImportedTitle_);
+        const int added = store_.addSongs(id, songs);
+        selectPlaylist(id);
+        setStatus("「" + desired + "」导入完成：新增 " + std::to_string(added) + " 首");
+        pendingImportedValid_ = false;
+        return;
+    }
+
     // 导入场景
     if (!pendingImportValid_) return;
     ImportContext context = pendingImport_;
@@ -675,21 +755,7 @@ void App::handleConflictChoice(int choice) {
 }
 
 void App::beginImport(const ImportContext& context) {
-    // 同一来源已经导入过 → 直接复用那个歌单，不再弹重名
-    if (store_.findBySource(context.sourceType, context.sourceTitle) != nullptr) {
-        startImportWorker(context);
-        return;
-    }
-    PlaylistNameConflict conflict;
-    if (store_.findConflict(context.title, -1, &conflict)) {
-        conflict_ = conflict;
-        conflictAction_ = context.toView ? ConflictAction::ImportToView : ConflictAction::ImportFav;
-        conflictPlaylistId_ = -1;
-        pendingImport_ = context;
-        pendingImportValid_ = true;
-        conflictDialogRequested_ = true;
-        return;
-    }
+    // 先取数据、拿到真实标题后再判重（UP主/合集要等接口返回昵称/合集名）
     startImportWorker(context);
 }
 
@@ -711,9 +777,16 @@ void App::startImportWorker(const ImportContext& context) {
     };
 
     std::thread([this, context, progress]() {
-        bili::ImportedSongsResult result =
-            context.toView ? bili_.importToView(progress)
-                           : bili_.importFavFolder(context.folderId, progress);
+        bili::ImportedSongsResult result;
+        if (context.toView) {
+            result = bili_.importToView(progress);
+        } else if (context.seasonId > 0) {
+            result = bili_.importSeason(context.seasonId, progress);
+        } else if (context.spaceMid > 0) {
+            result = bili_.importSpaceUploads(context.spaceMid, progress);
+        } else {
+            result = bili_.importFavFolder(context.folderId, progress);
+        }
         AsyncEvent event;
         event.kind = AsyncEvent::Kind::ImportDone;
         event.ok = result.ok;
@@ -756,16 +829,11 @@ void App::finishImport(const AsyncEvent& event) {
         importProgressText_.clear();
         return;
     }
-    int64_t playlistId = -1;
-    if (event.overwrite) {
-        playlistId =
-            store_.createPlaylistOverwriting(event.desiredTitle, event.sourceType, event.sourceTitle);
-    } else if (const StoredPlaylist* existing =
-                   store_.findBySource(event.sourceType, event.sourceTitle)) {
-        playlistId = existing->id;
-    } else {
-        playlistId = store_.createPlaylist(event.desiredTitle, event.sourceType, event.sourceTitle);
-    }
+    std::string title = event.desiredTitle;
+    if (title.empty()) title = event.imported.suggestedTitle;
+    if (title.empty()) title = "导入歌单";
+    const std::string sourceTitle = event.sourceTitle.empty() ? title : event.sourceTitle;
+
     std::vector<StoredSong> songs;
     songs.reserve(event.imported.songs.size());
     for (const bili::ImportedSong& imported : event.imported.songs) {
@@ -778,11 +846,36 @@ void App::finishImport(const AsyncEvent& event) {
         song.durationMs = imported.durationMs;
         songs.push_back(std::move(song));
     }
+
+    // 同一来源已经导入过 → 直接复用那个歌单
+    if (const StoredPlaylist* existing = store_.findBySource(event.sourceType, sourceTitle)) {
+        const int added = store_.addSongs(existing->id, songs);
+        selectPlaylist(existing->id);
+        setStatus("「" + existing->title + "」导入完成：新增 " + std::to_string(added) + " 首");
+        importProgressText_.clear();
+        return;
+    }
+    // 重名 → 暂存数据，弹「覆盖 / 自动重命名」
+    PlaylistNameConflict conflict;
+    if (!event.overwrite && store_.findConflict(title, -1, &conflict)) {
+        pendingImportedResult_ = event.imported;
+        pendingImportedSourceType_ = event.sourceType;
+        pendingImportedTitle_ = title;
+        pendingImportedValid_ = true;
+        conflict_ = conflict;
+        conflictAction_ = ConflictAction::ImportPending;
+        conflictDialogRequested_ = true;
+        importProgressText_.clear();
+        return;
+    }
+    const int64_t playlistId =
+        event.overwrite ? store_.createPlaylistOverwriting(title, event.sourceType, sourceTitle)
+                        : store_.createPlaylist(title, event.sourceType, sourceTitle);
     const int added = store_.addSongs(playlistId, songs);
     selectPlaylist(playlistId);
-    setStatus("「" + event.desiredTitle + "」导入完成：新增 " + std::to_string(added) + " 首");
+    setStatus("「" + title + "」导入完成：新增 " + std::to_string(added) + " 首");
     importProgressText_.clear();
-    AppLog::info("App", "导入完成 " + event.desiredTitle + " 新增 " + std::to_string(added));
+    AppLog::info("App", "导入完成 " + title + " 新增 " + std::to_string(added));
 }
 
 void App::drawM3Dialogs() {
@@ -890,15 +983,86 @@ void App::drawM3Dialogs() {
             beginImport(context);
         }
         ImGui::Spacing();
-        ImGui::BeginDisabled(true);
-        ImGui::Button("UP主投稿（M3 后半段）", ImVec2(150.0f, 36.0f));
+        if (ImGui::Button("UP主投稿", ImVec2(150.0f, 36.0f))) {
+            importSourceDialogRequested_ = false;
+            importInputKind_ = 1;
+            importInput_[0] = '\0';
+            importInputError_.clear();
+            importInputRequested_ = true;
+        }
         ImGui::SameLine();
-        ImGui::Button("合集（M3 后半段）", ImVec2(150.0f, 36.0f));
-        ImGui::EndDisabled();
+        if (ImGui::Button("合集", ImVec2(150.0f, 36.0f))) {
+            importSourceDialogRequested_ = false;
+            importInputKind_ = 2;
+            importInput_[0] = '\0';
+            importInputError_.clear();
+            importInputRequested_ = true;
+        }
         ImGui::Spacing();
         if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
             importSourceDialogRequested_ = false;
             ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ---- UP主 UID / 合集 ID 输入 ----
+    if (importInputRequested_) ImGui::OpenPopup("导入 UP主 / 合集");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("导入 UP主 / 合集", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!importInputRequested_) ImGui::CloseCurrentPopup();
+        if (importInputKind_ == 1) {
+            ImGui::TextUnformatted("输入 UP 主 UID 或空间主页链接：");
+        } else {
+            ImGui::TextUnformatted("输入合集 ID 或合集链接：");
+        }
+        ImGui::SetNextItemWidth(460.0f);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        const bool submittedByEnter =
+            ImGui::InputText("##import_input", importInput_, sizeof(importInput_),
+                             ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::TextDisabled(importInputKind_ == 1
+                                ? "例如：668485527 或 https://space.bilibili.com/668485527"
+                                : "例如：123456 或 .../lists/123456?type=season");
+        if (!importInputError_.empty()) {
+            ImGui::TextColored(ImVec4(0.93f, 0.25f, 0.25f, 1.0f), "%s", importInputError_.c_str());
+        }
+        ImGui::Spacing();
+        bool confirm = submittedByEnter;
+        if (ImGui::Button("确定", ImVec2(110.0f, 32.0f))) confirm = true;
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            importInputRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        if (confirm) {
+            const std::string input = importInput_;
+            ImportContext context;
+            bool valid = false;
+            if (importInputKind_ == 1) {
+                const long long mid = parseSpaceMidInput(input);
+                if (mid <= 0) {
+                    importInputError_ = "没有识别到 UID，请检查输入";
+                } else {
+                    context.sourceType = "UPLOAD";
+                    context.spaceMid = mid;
+                    valid = true;
+                }
+            } else {
+                const long long seasonId = parseSeasonIdInput(input);
+                if (seasonId <= 0) {
+                    importInputError_ = "没有识别到合集 ID，请检查输入";
+                } else {
+                    context.sourceType = "SEASON";
+                    context.seasonId = seasonId;
+                    valid = true;
+                }
+            }
+            if (valid) {
+                importInputRequested_ = false;
+                ImGui::CloseCurrentPopup();
+                startImportWorker(context);
+            }
         }
         ImGui::EndPopup();
     }

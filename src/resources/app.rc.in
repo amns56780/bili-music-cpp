@@ -1,0 +1,4 @@
+#include <windows.h>
+
+/* exe 文件图标（资源管理器/任务栏固定时用），路径由 CMake 填入绝对路径 */
+IDI_APPICON ICON "@APP_ICON_PATH@"

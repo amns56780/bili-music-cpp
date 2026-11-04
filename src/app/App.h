@@ -59,12 +59,14 @@ private:
     };
 
     // 重名对话框后续动作
-    enum class ConflictAction { None, Create, Rename, ImportFav, ImportToView };
+    enum class ConflictAction { None, Create, Rename, ImportFav, ImportToView, ImportPending };
     struct ImportContext {
         std::string title;
         std::string sourceType;
         std::string sourceTitle;
         long long folderId = 0;
+        long long spaceMid = 0;
+        long long seasonId = 0;
         bool toView = false;
         bool overwrite = false;
     };
@@ -191,4 +193,16 @@ private:
 
     ImportContext pendingImport_;
     bool pendingImportValid_ = false;
+
+    // UP主/合集导入在拿到真实标题后才判重，冲突时把数据暂存这里
+    bili::ImportedSongsResult pendingImportedResult_;
+    std::string pendingImportedSourceType_;
+    std::string pendingImportedTitle_;
+    bool pendingImportedValid_ = false;
+
+    // UP主 UID / 合集 ID 输入弹窗
+    bool importInputRequested_ = false;
+    int importInputKind_ = 0;  // 1=UP主投稿 2=合集
+    char importInput_[512] = {};
+    std::string importInputError_;
 };
