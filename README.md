@@ -136,8 +136,8 @@ cmake --build build -j 8
 ## 打包（M5）
 
 ```powershell
-# 1) 需要 Python + py7zr（只用于生成 7z 载荷）：pip install py7zr
-# 2) 构建 + 打 zip + 打安装器 + 自检 + 冒烟测试
+# 需要 NSIS 3.x：把 portable 版解压到 ../tools/nsis（或设置环境变量 NSIS_DIR）
+# 构建 + 打 zip + 打安装器 + 自检 + 冒烟测试
 .\scripts\package.ps1
 
 # 复用现有 build 产物（跳过重新编译）
@@ -149,20 +149,18 @@ cmake --build build -j 8
 | 文件 | 说明 |
 | --- | --- |
 | `build\dist\bilimusic-cpp-portable-win64.zip` | 免安装包（解压即用，内置 vlc/） |
-| `build\dist\bilimusic-cpp-setup.exe` | 自解压安装器：提取到临时目录后运行 install.bat，默认装到 `%LOCALAPPDATA%\Programs\bilimusic`，带桌面/开始菜单快捷方式和「应用和功能」卸载项 |
+| `build\dist\bilimusic-cpp-setup.exe` | NSIS 安装向导（Modern UI 2，简体中文）：欢迎 / 安装目录 / 组件 / 完成页，按用户安装（无需 UAC、无需管理员），默认装到 `%LOCALAPPDATA%\Programs\bilimusic`，开始菜单 + 可选桌面快捷方式，注册「应用和功能」卸载项，支持 `/S` 静默安装 |
 
 实现说明：
 
-- SFX 模块用仓库内 `third_party/7zsd/7zSD.sfx`（7-Zip 9.20 安装器版，支持 config 的 `RunProgram`）；
-  `tools/7zip-extracted/7z.sfx` 是普通解压版、不支持 config，不要用错。
-- 该 SFX 模块只认 LZMA1，所以 `scripts/packaging/make_7z.py` 用 `py7zr` 以 LZMA1 写载荷；
-  免安装 zip 则用 PowerShell `Compress-Archive` 生成。
-- 打包脚本会自检：解压 zip、切出 setup 内嵌载荷并用 py7zr 解压、校验 `install.bat`/`uninstall.bat`，
-  最后从 staging 目录启动一次 exe 做冒烟测试，输出启动耗时与 Working Set。
-- 版本信息：`bilimusic.exe` 带 VERSIONINFO（1.0.0 / bilimusic / amns56780）；安装器在打包时由
-  `scripts/packaging/rescopy.cpp` 把图标和版本资源复制进 7zSD.sfx（版本号、图标与主程序一致）。
-  未做数字签名（需要证书），如需彻底消除 SmartScreen 提示需自行购买/使用代码签名证书。
-
+- 安装器脚本：`scripts/packaging/bilimusic.nsi`（Modern UI 2 + SimpChinese）；品牌图
+  `installer-welcome.bmp` / `installer-header.bmp` 由应用图标生成，窗口/安装器图标与版本信息（1.0.0）同主程序。
+- 载荷（exe + assets + vlc/ + readme）由 NSIS `File /r` 打进 setup.exe（SOLID LZMA）；
+  免安装 zip 用 PowerShell `Compress-Archive` 生成。
+- 卸载器删除快捷方式、注册表和安装目录（自删除用临时 bat 延迟清理），并可选择是否删除
+  `%USERPROFILE%\.bilimusic` 里的歌单与登录信息。
+- 打包脚本自检 exe/setup 版本号与载荷完整性，最后从 staging 启动一次 exe，输出启动耗时与 Working Set。
+- 未做数字签名（需要代码签名证书）；如需彻底消除 SmartScreen 提示需自行签名 setup.exe。
 
 ## 目录结构
 

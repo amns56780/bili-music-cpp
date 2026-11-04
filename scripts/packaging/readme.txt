@@ -14,7 +14,9 @@ Data (shared with the Java version):
   %USERPROFILE%\.bilimusic\cache\          - full-song playback cache
   %USERPROFILE%\.bilimusic\downloads\      - downloaded songs
 
-Install / uninstall:
-  bilimusic-setup.exe  (self-extracting installer)
-    default dir: %LOCALAPPDATA%\Programs\bilimusic
-  uninstall: Settings - Apps, or uninstall.bat in the install folder
+Installer:
+  bilimusic-cpp-setup.exe is a modern NSIS wizard:
+    - per-user install (no admin / UAC), default %LOCALAPPDATA%\Programs\bilimusic
+    - Start Menu shortcut, optional desktop shortcut
+    - "Apps & Features" uninstall entry; silent: /S (optionally /D=<dir>)
+  To uninstall: Windows Settings - Apps, or uninstall.exe in the install folder.
