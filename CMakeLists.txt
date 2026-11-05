@@ -57,6 +57,7 @@ set(APP_SOURCES
     src/ui/Theme.cpp
     src/ui/Components.cpp
     src/ui/ImageCache.cpp
+    src/ui/EmojiAtlas.cpp
     src/platform/SystemTray.cpp
     src/ui/TitleBar.cpp
     src/ui/WindowFrame.cpp
@@ -82,8 +83,9 @@ endif()
 
 if (WIN32)
     # comdlg32 = 打开文件对话框；shell32 / ole32 留给后续托盘与拖放
+    # d2d1/dwrite/windowscodecs：彩色 emoji（Segoe UI Emoji）光栅化
     target_link_libraries(bilimusic PRIVATE comdlg32 shell32 ole32 uuid user32 gdi32 winhttp
-        advapi32)
+        advapi32 d2d1 dwrite windowscodecs)
 endif()
 
 # Windows exe 图标资源（与 Java 版同款 bilimusic.ico）

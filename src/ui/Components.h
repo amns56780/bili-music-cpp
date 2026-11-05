@@ -32,6 +32,9 @@ float MeasureText(ImFont* font, float size, const std::string& text);
 // 显示层文本净化：把 emoji 替换成音符图标（ImGui 字体没有彩色 emoji 字形）。
 // 数据本身不动，只影响显示。
 std::string DisplayText(const std::string& text);
+// 富文本：emoji 用彩色纹理绘制，普通文字用 ImGui 字体绘制
+void DrawRichText(ImFont* font, float size, ImVec2 pos, ImU32 color, const std::string& text);
+float MeasureRichText(ImFont* font, float size, const std::string& text);
 
 // 图标按钮：hover 圆形底色 + 手型光标；enabled=false 时半透明且不可点
 bool IconButton(const char* id, uint32_t icon, float size = 32.0f, float iconSize = 18.0f,

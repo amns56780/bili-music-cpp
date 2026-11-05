@@ -57,7 +57,7 @@ void drawPlaylistRow(const ImVec2& origin, const StoredPlaylist& playlist, const
 void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float height,
                  const std::string& statusText, bool statusIsError, int playlistCount,
                  bool loggedIn, const std::string& userName, long long userId,
-                 SidebarActions* actions) {
+                 bool actionsExpanded, SidebarActions* actions) {
     const float width = Dimens::SidebarWidth;
 
     // 本函数接收到的工作区（子窗口）左上角，全部局部坐标都基于它换算
@@ -109,7 +109,11 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
 
     // ---------------- 歌单列表 ----------------
     const float listTop = 146.0f;
-    const float bottomArea = 160.0f;  // 状态行 + 4 个底部入口
+    // 底部区域：折叠标题行 +（展开时的 4 个入口）
+    const float actionsHeaderHeight = 30.0f;
+    const float actionRowHeight = 36.0f;
+    const float bottomArea = 8.0f + actionsHeaderHeight +
+                             (actionsExpanded ? 4.0f * actionRowHeight : 0.0f) + 6.0f;
     const float statusArea = statusText.empty() ? 0.0f : 22.0f;
     const float listHeight = height - listTop - bottomArea - statusArea;
     if (listHeight > 40.0f) {
@@ -140,20 +144,57 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     }
     DividerLine(0.0f, width, dividerY);
 
-    float actionY = dividerY + 8.0f;
+    // 折叠/展开底部入口的标题行
+    float actionY = dividerY + 6.0f;
     ImGui::SetCursorPos(ImVec2(8.0f, actionY));
-    if (SidebarAction("local_music", Icons::FolderOpen, "本地音乐")) actions->openLocalMusic = true;
-    actionY += 36.0f;
-    ImGui::SetCursorPos(ImVec2(8.0f, actionY));
-    if (SidebarAction("output_device", Icons::Headset, "输出设备")) actions->openOutputDevice = true;
-    actionY += 36.0f;
-    ImGui::SetCursorPos(ImVec2(8.0f, actionY));
-    if (SidebarAction("cache_settings", Icons::Tune, "播放缓存")) actions->openCacheSettings = true;
-    actionY += 36.0f;
-    ImGui::SetCursorPos(ImVec2(8.0f, actionY));
-    if (SidebarAction("import_playlist", Icons::CloudDownload,
-                      "导入歌单（" + std::to_string(playlistCount) + "）")) {
-        actions->toggleImportMenu = true;
+    ImGui::PushID("actions_header");
+    const float actionsHeaderWidth = width - 16.0f;
+    const bool actionsHeaderPressed =
+        ImGui::InvisibleButton("##actions_header", ImVec2(actionsHeaderWidth, actionsHeaderHeight));
+    const bool actionsHeaderHovered = ImGui::IsItemHovered();
+    ImGui::PopID();
+    if (actionsHeaderHovered) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        draw->AddRectFilled(ImGui::GetItemRectMin(),
+                            ImVec2(ImGui::GetItemRectMin().x + actionsHeaderWidth,
+                                   ImGui::GetItemRectMin().y + actionsHeaderHeight),
+                            Colors::Hover, 8.0f);
+    }
+    const ImVec2 actionsHeaderPos = ImGui::GetItemRectMin();
+    draw->AddText(GetFonts().small, 15.0f,
+                  ImVec2(actionsHeaderPos.x + 10.0f,
+                         actionsHeaderPos.y + (actionsHeaderHeight - 15.0f) * 0.5f + 1.0f),
+                  Colors::Text3, "功能");
+    const std::string chevron =
+        Icons::Utf8(actionsExpanded ? Icons::ExpandLess : Icons::ExpandMore);
+    draw->AddText(GetFonts().body, 18.0f,
+                  ImVec2(actionsHeaderPos.x + actionsHeaderWidth - 28.0f,
+                         actionsHeaderPos.y + (actionsHeaderHeight - 18.0f) * 0.5f),
+                  actionsHeaderHovered ? Colors::Text2 : Colors::Text3, chevron.c_str());
+    if (actionsHeaderPressed) actions->toggleActionsExpanded = true;
+
+    if (actionsExpanded) {
+        actionY += actionsHeaderHeight + 2.0f;
+        ImGui::SetCursorPos(ImVec2(8.0f, actionY));
+        if (SidebarAction("local_music", Icons::FolderOpen, "本地音乐")) {
+            actions->openLocalMusic = true;
+        }
+        actionY += actionRowHeight;
+        ImGui::SetCursorPos(ImVec2(8.0f, actionY));
+        if (SidebarAction("output_device", Icons::Headset, "输出设备")) {
+            actions->openOutputDevice = true;
+        }
+        actionY += actionRowHeight;
+        ImGui::SetCursorPos(ImVec2(8.0f, actionY));
+        if (SidebarAction("cache_settings", Icons::Tune, "播放缓存")) {
+            actions->openCacheSettings = true;
+        }
+        actionY += actionRowHeight;
+        ImGui::SetCursorPos(ImVec2(8.0f, actionY));
+        if (SidebarAction("import_playlist", Icons::CloudDownload,
+                          "导入歌单（" + std::to_string(playlistCount) + "）")) {
+            actions->toggleImportMenu = true;
+        }
     }
 }
 

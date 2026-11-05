@@ -19,11 +19,12 @@ struct SidebarActions {
     bool pasteLink = false;
     bool login = false;
     bool logout = false;
+    bool toggleActionsExpanded = false;
 };
 
 void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float height,
                  const std::string& statusText, bool statusIsError, int playlistCount,
                  bool loggedIn, const std::string& userName, long long userId,
-                 SidebarActions* actions);
+                 bool actionsExpanded, SidebarActions* actions);
 
 }  // namespace Ui

@@ -1,7 +1,8 @@
 #include <windows.h>
 
-/* exe 文件图标（资源管理器/任务栏固定时用），路径由 CMake 填入绝对路径 */
-IDI_APPICON ICON "@APP_ICON_PATH@"
+/* exe 文件图标：必须是数字 ID（1），资源管理器/任务栏才会把它当作程序图标；
+   系统托盘也用 MAKEINTRESOURCE(1) 加载它。路径由 CMake 填入。 */
+1 ICON "@APP_ICON_PATH@"
 
 /* 版本信息：资源管理器「属性 → 详细信息」、安装器、防误报都用得到 */
 VS_VERSION_INFO VERSIONINFO

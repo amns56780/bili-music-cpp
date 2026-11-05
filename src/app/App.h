@@ -154,7 +154,7 @@ private:
     void prefetchNextSong();
     // 整首缓存（激进缓存）：后台下载完整音频到 ~/.bilimusic/cache，播本地文件实现秒 seek
     void startCacheDownload(long long songId, const std::string& bvid, long long cid,
-                            int qualitySnapshot, const std::string& title);
+                            int qualitySnapshot, const std::string& title, bool manual = false);
     void prefetchNextSongCache();
     void handleCacheReady(const AsyncEvent& event);
     void clearPlaybackCache();
@@ -303,6 +303,10 @@ private:
     // 播放缓存范围（秒）：2/5/10/20，写入 audio.network_cache
     int networkCacheSeconds_ = 5;
     bool cacheSettingsDialogRequested_ = false;
+    // 自动整首缓存（含预取下一首），写入 audio.full_cache，默认开启
+    bool fullCacheEnabled_ = true;
+    // 侧栏底部入口（本地音乐/输出设备/播放缓存/导入歌单）折叠状态
+    bool sidebarActionsExpanded_ = true;
 
     // 左侧栏折叠（带宽度动画，状态持久化）
     bool sidebarCollapsed_ = false;

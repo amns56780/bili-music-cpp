@@ -8,6 +8,7 @@
 #endif
 #include <windows.h>
 
+#include "ui/EmojiAtlas.h"
 #include "ui/ImageCache.h"
 
 #include <GLFW/glfw3.h>
@@ -156,12 +157,82 @@ ImU32 lerpColor(ImU32 from, ImU32 to, float t) {
     return IM_COL32((int)(ar + (br - ar) * t), (int)(ag + (bg - ag) * t), (int)(ab + (bb - ab) * t), 255);
 }
 
+struct RichItem {
+    std::string text;
+    bool emoji = false;
+    float width = 0.0f;
+};
+
+float emojiAdvance(float size) { return size * 1.08f; }
+
+std::vector<RichItem> buildRichItems(ImFont* font, float size, const std::string& text) {
+    std::vector<RichItem> items;
+    std::string pending;
+    float pendingWidth = 0.0f;
+    auto flush = [&]() {
+        if (pending.empty()) return;
+        items.push_back(RichItem{pending, false, pendingWidth});
+        pending.clear();
+        pendingWidth = 0.0f;
+    };
+    size_t offset = 0;
+    while (offset < text.size()) {
+        std::string token;
+        const size_t emojiLength = NextEmojiToken(text, offset, &token);
+        if (emojiLength > 0) {
+            flush();
+            items.push_back(RichItem{token, true, emojiAdvance(size)});
+            offset += emojiLength;
+            continue;
+        }
+        size_t length = 1;
+        decodeUtf8(text, offset, &length);
+        if (length == 0) length = 1;
+        const size_t next = std::min(text.size(), offset + length);
+        pending.append(text, offset, next - offset);
+        pendingWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0f, pending.c_str()).x;
+        offset = next;
+    }
+    flush();
+    return items;
+}
+
+float richTextWidth(ImFont* font, float size, const std::string& text) {
+    float width = 0.0f;
+    for (const RichItem& item : buildRichItems(font, size, text)) width += item.width;
+    return width;
+}
+
+void drawRichTextImpl(ImFont* font, float size, ImVec2 pos, ImU32 color, const std::string& text) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    float x = pos.x;
+    for (const RichItem& item : buildRichItems(font, size, text)) {
+        if (!item.emoji) {
+            draw->AddText(font, size, ImVec2(x, pos.y), color, item.text.c_str());
+            x += item.width;
+            continue;
+        }
+        const unsigned int texture = EmojiTexture(item.text);
+        const float emojiSize = emojiAdvance(size);
+        if (texture != 0) {
+            // 纹理是 64x64 的彩色 emoji；略微上移让视觉基线和文字一致
+            draw->AddImage((ImTextureID)(intptr_t)texture, ImVec2(x, pos.y - emojiSize * 0.10f),
+                           ImVec2(x + emojiSize, pos.y - emojiSize * 0.10f + emojiSize));
+        } else {
+            // 渲染失败的兜底：画一个音符图标，至少不出现豆腐块
+            const std::string fallback = Icons::Utf8(Icons::MusicNote);
+            draw->AddText(font, size, ImVec2(x, pos.y), color, fallback.c_str());
+        }
+        x += emojiSize;
+    }
+}
+
 void drawTextAt(ImFont* font, float size, ImVec2 pos, ImU32 color, const std::string& text) {
-    ImGui::GetWindowDrawList()->AddText(font, size, pos, color, text.c_str());
+    drawRichTextImpl(font, size, pos, color, text);
 }
 
 float textWidth(ImFont* font, float size, const std::string& text) {
-    return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x;
+    return richTextWidth(font, size, text);
 }
 
 }  // namespace
@@ -223,42 +294,61 @@ void TextNumber(const std::string& text, ImU32 color) {
 }
 
 void TextEllipsis(const std::string& rawText, float maxWidth, ImFont* font, ImU32 color, ImVec2 pos) {
-    const std::string text = sanitizeForDisplay(rawText);
     ImGui::PushFont(font);
     const float fontSize = ImGui::GetFontSize();
-    const float width = ImGui::CalcTextSize(text.c_str()).x;
-    if (width <= maxWidth) {
+    const std::vector<RichItem> items = buildRichItems(font, fontSize, rawText);
+    float total = 0.0f;
+    for (const RichItem& item : items) total += item.width;
+    if (total <= maxWidth) {
         ImGui::PopFont();
-        drawTextAt(font, fontSize, pos, color, text);
+        drawRichTextImpl(font, fontSize, pos, color, rawText);
         return;
     }
     const std::string ellipsis = "…";
-    const float ellipsisWidth = ImGui::CalcTextSize(ellipsis.c_str()).x;
-    // 按 UTF-8 边界线性累加，找最长可显示前缀。
-    // （之前用二分 + 「跳过续字节」，当 mid 正好落在续字节上会被退回到 low，
-    //   导致 low 永远不变 —— 长标题时会死循环，界面就「未响应」。）
-    size_t offset = 0;
-    size_t best = 0;
-    float lastWidth = 0.0f;
-    while (offset < text.size()) {
-        size_t length = 1;
-        decodeUtf8(text, offset, &length);
-        if (length == 0) break;
-        const size_t next = offset + length;
-        if (next > text.size()) break;
-        const float width = ImGui::CalcTextSize(text.substr(0, next).c_str()).x;
-        if (width + ellipsisWidth <= maxWidth) {
-            best = next;
-            lastWidth = width;
-            offset = next;
-        } else {
-            break;
+    const float ellipsisWidth = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, ellipsis.c_str()).x;
+    std::string prefix;
+    float used = 0.0f;
+    bool done = false;
+    for (const RichItem& item : items) {
+        if (item.emoji) {
+            if (used + item.width + ellipsisWidth > maxWidth) {
+                done = true;
+                break;
+            }
+            prefix += item.text;
+            used += item.width;
+            continue;
         }
+        size_t offset = 0;
+        while (offset < item.text.size()) {
+            size_t length = 1;
+            decodeUtf8(item.text, offset, &length);
+            if (length == 0) length = 1;
+            const size_t next = std::min(item.text.size(), offset + length);
+            const std::string piece = item.text.substr(offset, next - offset);
+            const float pieceWidth =
+                font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, piece.c_str()).x;
+            if (used + pieceWidth + ellipsisWidth > maxWidth) {
+                done = true;
+                break;
+            }
+            prefix += piece;
+            used += pieceWidth;
+            offset = next;
+        }
+        if (done) break;
     }
-    (void)lastWidth;
     ImGui::PopFont();
-    if (best == 0) return;
-    drawTextAt(font, fontSize, pos, color, text.substr(0, best) + ellipsis);
+    if (prefix.empty()) return;
+    drawRichTextImpl(font, fontSize, pos, color, prefix + ellipsis);
+}
+
+void DrawRichText(ImFont* font, float size, ImVec2 pos, ImU32 color, const std::string& text) {
+    drawRichTextImpl(font, size, pos, color, text);
+}
+
+float MeasureRichText(ImFont* font, float size, const std::string& text) {
+    return richTextWidth(font, size, text);
 }
 
 namespace {

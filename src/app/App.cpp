@@ -341,6 +341,8 @@ void App::init(GLFWwindow* window) {
     }
     sidebarCollapsed_ = bili_.getSetting("ui.sidebar_collapsed") == "1";
     sidebarAnimWidth_ = sidebarCollapsed_ ? 0.0f : (float)Ui::Dimens::SidebarWidth;
+    sidebarActionsExpanded_ = bili_.getSetting("ui.sidebar_actions_expanded") != "0";
+    fullCacheEnabled_ = bili_.getSetting("audio.full_cache") != "0";
 
     // 恢复音量与窗口位置/大小（Java 版同款 key）
     const std::string savedVolume = bili_.getSetting("desktop.volume");
@@ -1191,23 +1193,23 @@ void App::drawImmersive() {
     coverImage(currentTitle, width * 0.5f - coverSize * 0.5f, coverY, coverSize, px(20));
 
     float textY = coverY + coverSize + px(34);
-    const std::string titleShown = Ui::DisplayText(currentTitle);
+    const std::string& titleShown = currentTitle;
     const float titleLimit = std::min(px(800), width - px(96));
-    const float titleWidth = Ui::MeasureText(Ui::GetFonts().xl, px(30), titleShown);
+    const float titleWidth = Ui::MeasureRichText(Ui::GetFonts().xl, px(30), titleShown);
     if (titleWidth <= titleLimit) {
-        draw->AddText(Ui::GetFonts().xl, px(30),
-                      ImVec2(width * 0.5f - titleWidth * 0.5f, textY),
-                      fade(IM_COL32(255, 255, 255, 255)), titleShown.c_str());
+        Ui::DrawRichText(Ui::GetFonts().xl, px(30),
+                         ImVec2(width * 0.5f - titleWidth * 0.5f, textY),
+                         fade(IM_COL32(255, 255, 255, 255)), titleShown);
     } else {
         Ui::TextEllipsis(titleShown, titleLimit, Ui::GetFonts().xl, IM_COL32(255, 255, 255, 255),
                          ImVec2(width * 0.5f - titleLimit * 0.5f, textY));
     }
     textY += px(40);
-    const std::string artistShown = Ui::DisplayText(currentArtist);
-    const float artistWidth = Ui::MeasureText(Ui::GetFonts().body, px(18), artistShown);
-    draw->AddText(Ui::GetFonts().body, px(18),
-                  ImVec2(width * 0.5f - artistWidth * 0.5f, textY),
-                  fade(IM_COL32(255, 255, 255, 0xB3)), artistShown.c_str());
+    const std::string& artistShown = currentArtist;
+    const float artistWidth = Ui::MeasureRichText(Ui::GetFonts().body, px(18), artistShown);
+    Ui::DrawRichText(Ui::GetFonts().body, px(18),
+                     ImVec2(width * 0.5f - artistWidth * 0.5f, textY),
+                     fade(IM_COL32(255, 255, 255, 0xB3)), artistShown);
 
     // 进度条
     const float progressY = textY + px(52);
@@ -1934,7 +1936,8 @@ void App::chooseLocalCover() {
 
 
 void App::startCacheDownload(long long songId, const std::string& bvid, long long cid,
-                            int qualitySnapshot, const std::string& title) {
+                            int qualitySnapshot, const std::string& title, bool manual) {
+    if (!manual && !fullCacheEnabled_) return;
     if (songId < 0 || bvid.empty() || cid <= 0) return;
     if (cachingSongs_.count(songId) != 0) return;
     cachingSongs_.insert(songId);
@@ -1981,6 +1984,7 @@ void App::startCacheDownload(long long songId, const std::string& bvid, long lon
 }
 
 void App::prefetchNextSongCache() {
+    if (!fullCacheEnabled_) return;
     const std::vector<const StoredSong*> songs = currentSongs();
     if (songs.size() <= 1) return;
     int index = -1;
@@ -2598,6 +2602,37 @@ void App::drawM3Dialogs() {
             }
         }
         ImGui::Spacing();
+        ImGui::TextUnformatted("整首缓存");
+        bool fullCache = fullCacheEnabled_;
+        if (ImGui::Checkbox("播放时自动缓存整首 + 预取下一首（推荐）", &fullCache)) {
+            fullCacheEnabled_ = fullCache;
+            bili_.setSetting("audio.full_cache", fullCache ? "1" : "0");
+            setStatus(fullCache ? "已开启自动整首缓存" : "已关闭自动整首缓存");
+            if (fullCache) prefetchNextSongCache();
+        }
+        ImGui::TextDisabled("缓存完成后拖动进度条即时响应；文件在 %USERPROFILE%\\.bilimusic\\cache");
+        const bool hasCurrentSong = !curBvid_.empty() && curCid_ > 0;
+        const bool currentCached =
+            hasCurrentSong && cacheFileUsable(playbackCacheFile(curBvid_, qualityId_));
+        const bool currentCaching = cachingSongs_.count(playingSongId_) != 0;
+        if (hasCurrentSong) {
+            ImGui::TextDisabled(currentCached ? "当前曲目：已缓存整首"
+                                              : (currentCaching ? "当前曲目：正在缓存…"
+                                                                : "当前曲目：未缓存"));
+        } else {
+            ImGui::TextDisabled("当前没有正在播放的歌曲（本地文件无需缓存）");
+        }
+        ImGui::BeginDisabled(!hasCurrentSong || currentCached || currentCaching);
+        if (ImGui::Button("立即缓存整首当前曲目", ImVec2(210.0f, 32.0f)) && hasCurrentSong) {
+            startCacheDownload(playingSongId_, curBvid_, curCid_, qualityId_, playingTitle_, true);
+            setStatus("已开始缓存整首：" + playingTitle_);
+        }
+        ImGui::EndDisabled();
+        if (currentCached) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("（本地播放，拖动进度条即时响应）");
+        }
+        ImGui::Spacing();
         if (ImGui::Button("清除播放缓存", ImVec2(140.0f, 32.0f))) {
             clearPlaybackCache();
         }
@@ -2992,7 +3027,7 @@ void App::draw() {
         ImGui::PopStyleColor();
         Ui::DrawSidebar(store_, selectedPlaylistId_, mainHeight, status_, statusError_,
                         (int)store_.playlists().size(), accountLoggedIn_, accountName_, accountId_,
-                        &sidebarActions);
+                        sidebarActionsExpanded_, &sidebarActions);
         ImGui::EndChild();
     }
 
@@ -3060,6 +3095,10 @@ void App::draw() {
         outputDeviceDialogRequested_ = true;
     }
     if (sidebarActions.openCacheSettings) cacheSettingsDialogRequested_ = true;
+    if (sidebarActions.toggleActionsExpanded) {
+        sidebarActionsExpanded_ = !sidebarActionsExpanded_;
+        bili_.setSetting("ui.sidebar_actions_expanded", sidebarActionsExpanded_ ? "1" : "0");
+    }
     if (sidebarActions.openLocalMusic) {
         const StoredPlaylist* local = store_.findBySource("LOCAL", "本地音乐");
         if (local == nullptr) {

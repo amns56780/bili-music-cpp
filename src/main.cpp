@@ -14,6 +14,7 @@
 
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
+#include <shobjidl.h>  // SetCurrentProcessExplicitAppUserModelID（任务栏分组/图标）
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -137,6 +138,8 @@ int runPauseTest(const std::string& mode, const std::string& target) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // 让任务栏把窗口归到 bilimusic 而不是 python/exe 的默认组，图标才会用我们的 exe 图标
+    SetCurrentProcessExplicitAppUserModelID(L"amns56780.bilimusic");
     if (argc > 2 && (std::string(argv[1]) == "--test-pause" ||
                      std::string(argv[1]) == "--test-pause-online")) {
         return runPauseTest(argv[1], argv[2]);
