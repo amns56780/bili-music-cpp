@@ -165,11 +165,12 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
                   ImVec2(actionsHeaderPos.x + 10.0f,
                          actionsHeaderPos.y + (actionsHeaderHeight - 15.0f) * 0.5f + 1.0f),
                   Colors::Text3, "功能");
+    // 展开时箭头朝下（指向下方内容），收起时朝上（表示点击展开）
     const std::string chevron =
-        Icons::Utf8(actionsExpanded ? Icons::ExpandLess : Icons::ExpandMore);
+        Icons::Utf8(actionsExpanded ? Icons::ExpandMore : Icons::ExpandLess);
     draw->AddText(GetFonts().body, 18.0f,
                   ImVec2(actionsHeaderPos.x + actionsHeaderWidth - 28.0f,
-                         actionsHeaderPos.y + (actionsHeaderHeight - 18.0f) * 0.5f),
+                         actionsHeaderPos.y + (actionsHeaderHeight - 18.0f) * 0.5f + 2.5f),
                   actionsHeaderHovered ? Colors::Text2 : Colors::Text3, chevron.c_str());
     if (actionsHeaderPressed) actions->toggleActionsExpanded = true;
 
