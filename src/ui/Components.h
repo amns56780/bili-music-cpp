@@ -51,7 +51,7 @@ bool GhostButton(const char* id, const std::string& label, uint32_t icon = 0,
 
 // 侧栏底部动作行（本地音乐 / 输出设备 / 导入歌单）
 bool SidebarAction(const char* id, uint32_t icon, const std::string& label,
-                   float height = 36.0f);
+                   float height = 36.0f, const char* tooltip = nullptr);
 
 // 播放/暂停大圆按钮
 bool PlayCircleButton(const char* id, bool playing, float size = 38.0f);

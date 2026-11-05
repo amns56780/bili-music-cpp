@@ -47,6 +47,7 @@ inline constexpr uint32_t ChevronLeft = 0xE5CB;
 inline constexpr uint32_t ChevronRight = 0xE5CC;
 inline constexpr uint32_t ExpandLess = 0xE5CE;
 inline constexpr uint32_t ExpandMore = 0xE5CF;
+inline constexpr uint32_t Info = 0xE88E;
 inline constexpr uint32_t GraphicEq = 0xE1B8;
 inline constexpr uint32_t BlurOn = 0xE3A5;
 inline constexpr uint32_t Alarm = 0xE855;

@@ -141,6 +141,12 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     if (!statusText.empty()) {
         TextEllipsis(statusText, width - 24.0f, GetFonts().small,
                      statusIsError ? Colors::Brand : Colors::Text3, abs(12.0f, dividerY - 22.0f));
+        // 状态文字被截断时，悬停显示完整内容
+        ImGui::SetCursorPos(ImVec2(8.0f, dividerY - 24.0f));
+        ImGui::PushID("status_hint");
+        ImGui::InvisibleButton("##status_hint", ImVec2(width - 16.0f, 20.0f));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", statusText.c_str());
+        ImGui::PopID();
     }
     DividerLine(0.0f, width, dividerY);
 
@@ -177,23 +183,27 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
     if (actionsExpanded) {
         actionY += actionsHeaderHeight + 2.0f;
         ImGui::SetCursorPos(ImVec2(8.0f, actionY));
-        if (SidebarAction("local_music", Icons::FolderOpen, "本地音乐")) {
+        if (SidebarAction("local_music", Icons::FolderOpen, "本地音乐", 36.0f,
+                          "扫描本地音乐文件夹：点右上角「…」菜单 →「扫描本地音乐文件夹」")) {
             actions->openLocalMusic = true;
         }
         actionY += actionRowHeight;
         ImGui::SetCursorPos(ImVec2(8.0f, actionY));
-        if (SidebarAction("output_device", Icons::Headset, "输出设备")) {
+        if (SidebarAction("output_device", Icons::Headset, "输出设备", 36.0f,
+                          "选择音乐输出到哪个设备；下一首 / 重新播放后生效")) {
             actions->openOutputDevice = true;
         }
         actionY += actionRowHeight;
         ImGui::SetCursorPos(ImVec2(8.0f, actionY));
-        if (SidebarAction("cache_settings", Icons::Tune, "播放缓存")) {
+        if (SidebarAction("cache_settings", Icons::Tune, "播放缓存", 36.0f,
+                          "网络缓存范围、整首缓存开关、清除播放缓存")) {
             actions->openCacheSettings = true;
         }
         actionY += actionRowHeight;
         ImGui::SetCursorPos(ImVec2(8.0f, actionY));
         if (SidebarAction("import_playlist", Icons::CloudDownload,
-                          "导入歌单（" + std::to_string(playlistCount) + "）")) {
+                          "导入歌单（" + std::to_string(playlistCount) + "）", 36.0f,
+                          "从 B 站收藏夹 / UP 主投稿 / 合集 / 视频链接导入歌单")) {
             actions->toggleImportMenu = true;
         }
     }

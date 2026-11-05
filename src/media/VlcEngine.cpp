@@ -7,6 +7,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <mmdeviceapi.h>
+#include <propsys.h>
 
 #include <cmath>
 #include <vector>
@@ -39,6 +41,65 @@ std::wstring exeDir() {
 bool fileExists(const std::wstring& path) {
     DWORD attrs = GetFileAttributesW(path.c_str());
     return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// WASAPI 枚举：VLC 3 的设备枚举依赖 player 且有时返回空（未起播 / mmdevice 未初始化），
+// 这里用 Windows MMDevice API 兜底，保证设置弹窗始终能列出系统输出设备。
+// MinGW 的 libuuid 里没有这两个 GUID 的定义，这里本地定义（值来自 mmdeviceapi.h）
+const CLSID kClsidMMDeviceEnumerator = {
+    0xbcde0395, 0xe52f, 0x467c, {0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e}};
+const IID kIidIMMDeviceEnumerator = {
+    0xa95664d2, 0x9614, 0x4f35, {0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6}};
+
+const PROPERTYKEY kPkeyDeviceFriendlyName = {
+    {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
+
+std::vector<std::pair<std::string, std::string>> enumerateWasapiRenderDevices() {
+    std::vector<std::pair<std::string, std::string>> result;
+    HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(com) && com != RPC_E_CHANGED_MODE) return result;
+    IMMDeviceEnumerator* enumerator = nullptr;
+    if (FAILED(CoCreateInstance(kClsidMMDeviceEnumerator, nullptr, CLSCTX_ALL,
+                                kIidIMMDeviceEnumerator,
+                                reinterpret_cast<void**>(&enumerator))) ||
+        enumerator == nullptr) {
+        return result;
+    }
+    IMMDeviceCollection* collection = nullptr;
+    if (SUCCEEDED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection)) &&
+        collection != nullptr) {
+        UINT count = 0;
+        collection->GetCount(&count);
+        for (UINT i = 0; i < count; ++i) {
+            IMMDevice* device = nullptr;
+            if (FAILED(collection->Item(i, &device)) || device == nullptr) continue;
+            std::string id;
+            LPWSTR endpointId = nullptr;
+            if (SUCCEEDED(device->GetId(&endpointId)) && endpointId != nullptr) {
+                id = wideToUtf8(endpointId);
+                CoTaskMemFree(endpointId);
+            }
+            std::string name;
+            IPropertyStore* store = nullptr;
+            if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store)) && store != nullptr) {
+                PROPVARIANT value;
+                PropVariantInit(&value);
+                if (SUCCEEDED(store->GetValue(kPkeyDeviceFriendlyName, &value)) &&
+                    value.vt == VT_LPWSTR && value.pwszVal != nullptr) {
+                    name = wideToUtf8(value.pwszVal);
+                }
+                if (value.vt == VT_LPWSTR && value.pwszVal != nullptr) {
+                    CoTaskMemFree(value.pwszVal);
+                }
+                store->Release();
+            }
+            device->Release();
+            if (!id.empty()) result.emplace_back(id, name.empty() ? id : name);
+        }
+        collection->Release();
+    }
+    enumerator->Release();
+    return result;
 }
 
 void appendError(std::string* error, const std::string& text) {
@@ -337,6 +398,14 @@ std::vector<VlcEngine::AudioDevice> VlcEngine::audioOutputDevices() const {
         };
         enumerate("mmdevice");
         if (devices.empty()) enumerate(nullptr);
+    }
+    if (devices.empty()) {
+        for (auto& entry : enumerateWasapiRenderDevices()) {
+            AudioDevice device;
+            device.id = std::move(entry.first);
+            device.name = std::move(entry.second);
+            devices.push_back(std::move(device));
+        }
     }
     return devices;
 }

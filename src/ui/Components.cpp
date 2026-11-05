@@ -441,10 +441,12 @@ bool GhostButton(const char* id, const std::string& label, uint32_t icon, float 
     return pressed;
 }
 
-bool SidebarAction(const char* id, uint32_t icon, const std::string& label, float height) {
+bool SidebarAction(const char* id, uint32_t icon, const std::string& label, float height,
+                   const char* tooltip) {
     ImGui::PushID(id);
     const float width = ImGui::GetContentRegionAvail().x;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::SetNextItemAllowOverlap();  // 右侧「?」信息按钮要能覆盖在整行按钮上
     const bool pressed = ImGui::InvisibleButton("##action", ImVec2(width, height));
     const bool hovered = ImGui::IsItemHovered();
     if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -458,6 +460,22 @@ bool SidebarAction(const char* id, uint32_t icon, const std::string& label, floa
                ImVec2(pos.x + 10.0f, pos.y + iconTextTopForCenter(height, 17.0f)), Colors::Text2, glyph);
     drawTextAt(GetFonts().body, 18.0f,
                ImVec2(pos.x + 10.0f + iconWidth + 10.0f, pos.y + (height - 18.0f) / 2), Colors::Text2, label);
+
+    // 右侧「?」按钮：悬停显示该功能的说明
+    if (tooltip != nullptr && tooltip[0] != '\0') {
+        ImGui::SetCursorScreenPos(ImVec2(pos.x + width - 32.0f, pos.y + (height - 22.0f) * 0.5f));
+        ImGui::PushID("info");
+        ImGui::InvisibleButton("##info", ImVec2(22.0f, 22.0f));
+        const bool infoHovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        const ImVec2 infoPos = ImGui::GetItemRectMin();
+        drawTextAt(GetFonts().body, 16.0f, ImVec2(infoPos.x + 3.0f, infoPos.y + 2.0f),
+                   infoHovered ? Colors::Text : Colors::Text3, Icons::Utf8(Icons::Info));
+        if (infoHovered) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImGui::SetTooltip("%s", tooltip);
+        }
+    }
     ImGui::PopID();
     return pressed;
 }
