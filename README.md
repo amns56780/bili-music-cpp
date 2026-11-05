@@ -1,191 +1,196 @@
-# bilimusic · C++ 桌面版（重构中）
+# bilimusic · C++ 桌面版 v1.0.1
 
-> 这是 [bilimusic](https://github.com/amns56780/bili-music) 桌面端的 **C++ 重写版**。
-> 原来的 Kotlin / Compose 版本继续维护、不受影响；这里是并行的新实现。
+> 这是 [bilimusic](https://github.com/amns56780/bili-music) 桌面端的 **C++ 重写版**，目前是本机日常使用的版本。
+> 原来的 Kotlin / Compose 版本继续维护、不受影响；这里是并行的原生实现，两者共用同一份用户数据。
 
 ## 为什么另起一版
 
-- 去掉对 **JRE/JDK 17+** 的依赖：Java 版安装包必须要求机器上装了 Java，C++ 版是原生 exe
-- 更小的体积和内存占用、更快的启动（Java 版实测启动约 3.2s、Working Set 约 430MB）
-- 顺带把播放内核（libVLC）的封装换成直接 C API，不再经过 VLCJ/JNA
+- 去掉对 **JRE/JDK 17+** 的依赖：Java 版安装包只内置 VLC，仍要求机器上有 Java；C++ 版是原生 exe，无运行时依赖
+- 更小的体积和内存占用、更快的启动（Java 版实测启动约 3.2s、Working Set 约 430MB；C++ 版 0.66–0.81s、215–241MB）
+- 顺带把播放内核（libVLC）的封装换成直接 C API（`LoadLibrary` + `GetProcAddress`），不再经过 VLCJ/JNA
 
-## 当前进度（M1 / M1.5）
+## 当前状态
 
-- [x] CMake + MinGW-w64 构建，依赖全部内嵌在 `third_party/`（ImGui / GLFW / nlohmann-json），不需要 Qt、vcpkg、Visual Studio
-- [x] 深色界面骨架：左侧歌单栏 + 右侧曲目表 + 底部播放条
-- [x] 读取 Java 版同一份数据文件 `%USERPROFILE%\\.bilimusic\\playlists.json`
-- [x] libVLC 动态加载（优先 `程序目录\\vlc`，其次系统安装的 VLC），支持本地文件播放 / 暂停 / 停止 / 进度拖动 / 音量
-- [x] M1.5：UI 与模块化组件对齐 Java 版（详见 `docs/ROADMAP.md`）
+**M1–M5 全部完成，版本 v1.0.1，可日常使用。**
 
-### M1.5 · UI 与模块化组件（已完成）
+| 里程碑 | 内容 | 状态 |
+| --- | --- | --- |
+| M1 / M1.5 | CMake + MinGW 构建、无边框自绘 UI、侧栏/歌单页/播放条、读取 Java 版数据、libVLC 播放 | ✅ |
+| M1.6 | WASAPI 应用级音量、Win32 原生拖动/缩放、圆角抗锯齿、音量条重置修复 | ✅ |
+| M2 | 扫码/Cookie 登录、WBI 签名、取流与音质档位、在线播放、备用地址、看门狗 | ✅ |
+| M3 | 歌单增删改/重名处理、四种来源导入、多选复制/移动/删除、封面三种来源、下载、本地扫描 | ✅ |
+| M4 | 托盘、全局媒体键、窗口内快捷键、沉浸模式、队列、定时、输出设备、防熄屏、整首缓存+预取 | ✅ |
+| M5 | 内置 VLC、portable zip、NSIS 安装向导 | ✅ |
 
-- [x] 自绘无边框标题栏：拖动窗口、双击最大化、最小化 / 最大化 / 还原 / 关闭（Win32 原生调用）
-- [x] 侧栏模块：账号卡、粘贴链接入口、我的歌单（渐变封面占位 + 来源·曲目数）、底部「本地音乐 / 输出设备 / 导入歌单」
-- [x] 歌单页模块：大封面、来源标签、标题/数量/创建日期、标签行、播放全部 / 多选 / 更多菜单、曲目表（播放行高亮 + 红色律动图标）
-- [x] 播放条模块：当前曲目 / 播放模式 / 上一首 / 播放暂停 / 下一首 / 进度拖动 / 音量 / 输出设备 / 定时 / 队列
-- [x] 可复用组件库 `src/ui/Components`：IconButton / PrimaryButton / GhostButton / SidebarAction / PlayCircleButton / ThinSlider / CoverPlaceholder / TagChip / 文本组件
-- [x] 图标字体：Material Icons（Apache-2.0）合并进正文字体，按钮图标与 Java 版一一对应
-- [x] 播放模式按钮循环切换（顺序 / 列表循环 / 单曲循环 / 随机），图标同步变化
-- [x] emoji 兼容：Java 版数据里的 emoji 标题在 C++ 字体里没有字形，显示层统一替换成音符图标（数据不动）
-- [x] M1.6：三个由 Java 版继承的痛点修复
-  - **音量不再经过 VLC**：改用 Windows WASAPI 的「每应用音量」（ISimpleAudioVolume），拖动即时生效，libVLC 固定 100%；WASAPI 不可用时自动回退 libvlc
-  - **窗口拖动改系统原生**：子类化 WndProc，标题栏 WM_NCHITTEST 返回 HTCAPTION → 系统 modal 拖动（DWM 直接搬窗口，UI 线程零参与）；四边/四角返回 HT* 获得原生缩放；WM_GETMINMAXINFO 最大化不盖任务栏。Java 版被 AWT 挡住做不到，C++ 版是原生方案
-  - **封面/圆角抗锯齿**：圆角渐变从「逐行台阶」改为「轴对齐渐变条带 + 四角扇形 PathFillConvex（AA）」，圆形头像用抗锯齿实心圆
-  - 修掉音量条每帧被重置回 80% 的 bug（PlayBarActions 默认值误参与比较）
-- [x] **M2（核心链路已完成）**：WBI 签名 / Cookie 登录态 / 取流 / 在线播放
-  - [x] Cookie：读写与 Java 版共用的 `~/.bilimusic/settings.json` 里的 `cookie_blob`，启动自动校验 nav 并显示头像/昵称/UID
-  - [x] 登录弹窗（粘贴整段 Cookie）、退出登录；登录态失效提示
-  - [x] WBI 签名：nav 取 img_url/sub_url → 重排表得 mixin_key（缓存 24h）→ 参数加 wts 排序 → md5 得 w_rid
-  - [x] `x/web-interface/view` 取 cid/标题/UP主/时长
-  - [x] `x/player/wbi/playurl` 取流（fnval=4048），失败强刷 WBI key 重试一次，再退到 `x/player/playurl`
-  - [x] 音质选择：指定档位匹配 → 192K/132K/64K 降级链 → 最高带宽兜底；durl 兜底
-  - [x] 在线播放：libVLC + `http-referrer`/`http-user-agent`（否则 bilivideo 403）
-  - [x] 双击在线曲目播放、上一首/下一首自动取流、粘贴 BV 号/链接弹窗播放
-  - [x] 音量写入节流（修「调完音量后一炸一炸」）：
-  - 原因：每帧都写 WASAPI 音量（60 次/秒）+ 每帧写 libvlc 音量；音量写入自带短斜坡，高频重写会周期性爆音；
-    会话重建瞬间还会回退去写 VLC 音量（cbrt(80)≈43），和 WASAPI 的 100% 来回跳
-  - 修复：只在「音量变化 / 刚起播 / 会话重建」时写一次；平时 250ms 只读检查；WASAPI 模式永不回退写 VLC 音量
-  - 新增会话过期检测：VLC 换曲/恢复重建音频输出后自动重新绑定并重新下发音量
-- [x] 在线流暂停/恢复防断续：`:network-caching=3000` + `:http-reconnect=true`
-  - 原因：VLC 默认网络缓存只有 1s，暂停时缓存被耗干，恢复瞬间要重连 mcdn 拉数据 → 断断续续
-  - 自检工具：`bilimusic.exe --test-pause <本地音频>` / `--test-pause-online BV1xx`
-    （用 WASAPI 峰值表每 50ms 采样，统计恢复后的静音采样比例；修复前 ~11%，修复后 ~0.8%，本地文件 0%）
-- [x] 音质档位 UI：播放条进度条与音量组之间的小胶囊（自动 / 192K / 132K / 64K / Hi-Res / 杜比），
-  切换后立即重新取流并从当前进度续播；档位写入 `settings.json` 的 `audio_quality`（AUTO/Q192/Q132/Q64/HIRES/DOLBY，与 Java 版共用）
-- [x] 播放看门狗：在线曲目起播 6s 仍无进度 → 先切备用地址，再强制重新取流（覆盖 URL 过期场景）
-- [x] 网络缓存拉到 20s（`:network-caching=20000`），暂停/恢复和弱网更稳
-- [x] 音质胶囊按文字自适应宽度（之前固定 66px 会多出一截空白）
-- [x] 音量支持鼠标滚轮微调（鼠标在音量组上滚动，每格 ±2%）
-- [x] 字体整体再调大一档（正文 18 / 次要 15 / 标题 22 / 大标题 38），行高与表格同步放大
-- [x] 字体改用「微软雅黑 Bold」（msyhbd.ttc），文字更粗更清晰
-- [x] 音质胶囊文字居中、去掉右侧下拉三角（不再有空白）
-- [x] 扫码登录：B 站 `qrcode/generate` + `qrcode/poll` 轮询（未扫码 / 已扫码待确认 / 过期 / 成功），
-  成功后从 `Set-Cookie` 与回调 URL 解析登录态 Cookie 写入 settings.json，自动刷新昵称/UID；
-  二维码用内置 qrcodegen（Nayuki, MIT，third_party/qrcodegen）编码、ImGui 直接画方块
-- [x] M2 完成（登录 / WBI / 取流 / 在线播放 / 音质档位 / 备用地址 / 过期重取）
-- [x] **M3（第一批）**：歌单管理与导入
-  - [x] LibraryStore 支持写回 playlists.json（与 Java 版同格式、临时文件+改名安全落盘）
-  - [x] 新建 / 重命名 / 删除歌单；重名对话框（覆盖 / 自动重命名加 "(n)" / 取消），规则与 Java 版 PlaylistNaming 一致
-  - [x] 导入收藏夹：拉取"我创建的收藏夹"列表 → 选择 → 分页读取 → cid 补齐 → 去重写入；
-        同一来源重复导入自动复用原歌单（不重复建）
-  - [x] 导入稍后再看
-  - [x] 导入进度显示（"正在导入… / 正在补齐音频信息 153/173"）
-  - [x] 导入 UP 主投稿：输入 UID / 空间链接（WBI 签名 arc/search，分页 + cid 补齐）
-  - [x] 导入合集：输入合集 ID / 链接（seasons_archives_list，合集接口无 cid，统一用 view 补齐）
-  - [x] UP主/合集拿到真实昵称/合集名后才判重，重名同样走「覆盖 / 自动重命名 / 取消」
-  - [x] 多选：勾选曲目、全选/清空、复制/移动到其它歌单（按 bvid+cid 去重）、批量删除
-  - [x] 歌单封面：从歌单视频选封面（存 coverUrl）、从本地图片选封面（复制到 ~/.bilimusic/covers 并显示；
-        引入 stb_image + GL 纹理，本地封面在歌单页大图与侧栏小图都能显示）
-  - [x] 网络封面缓存：后台线程下载 B 站封面 → 主线程上传 GL 纹理（ImageCache），
-        歌单大图/侧栏小图/播放条封面都显示真实封面（失败自动回退渐变占位）
-  - [x] 下载当前曲目：当前在线播放的音频下载到 ~/.bilimusic/downloads/，并把 localPath 写回曲目
-  - [x] 本地音乐扫描：选文件夹递归扫描（mp3/flac/wav/m4a/aac/ogg/opus/wma/ape），
-        写入「本地音乐」歌单，本地曲目按 localPath 去重
-  - M3 全部完成 ✅
-- [x] 应用图标：与 Java 版同款 ic_launcher.png（glfwSetWindowIcon，多尺寸内嵌）
-  和 exe 文件图标 bilimusic.ico（windres 资源）
-- [x] 窗口位置/大小与音量记忆（settings.json 的 window.geometry / desktop.volume），
-  下次启动沿用；关闭收进托盘时也会保存
-- [x] 空闲未播放时底部播放条显示 BM 应用图标
-- [x] **M4（核心项已完成）**
-  - [x] 封面图：网络封面异步缓存（stb_image + GL 纹理）、本地图片封面、ContentScale.Crop 裁切；
-        「从歌单视频选封面」弹窗带缩略图列表 + 大图预览
-  - [x] 系统托盘：托盘图标 + 右键菜单（显示窗口 / 播放暂停 / 上一首 / 下一首 / 退出），
-        点关闭按钮收进托盘、托盘退出才真正退出
-  - [x] 全局媒体快捷键：媒体键 播放/暂停、上一首、下一首（全局键盘钩子，窗口隐藏也生效），
-        另支持 Ctrl+Alt+Space/←/→ 与 Ctrl+Alt+H 显示窗口
-  - [x] 窗口内快捷键：空格 播放/暂停、←/→ 快退/快进 3 秒、[ / ] 上一首/下一首（沉浸模式同）
-  - [x] 本地音乐扫描、下载当前曲目
-  - [x] 沉浸模式（对齐 Java 版 Immersive.kt）：点击播放条封面**自下而上滑入**，
-        默认背景是**桌面壁纸（高斯模糊）**，可切「自定义图片 / 纯色」；
-        左上角时间+日期、右上角全屏/播放模式/音量/背景设置/关闭按钮，
-        大封面 + 歌名 + UP主 + 可拖动进度条 + 「进入时间 · 已听时长」+ 上一首/播放/下一首，
-        底部**真实频谱**律动线条（WASAPI loopback + 1024 点 FFT，可隐藏）、鼠标 3 秒空闲自动隐藏、
-        滚轮 ±1% 音量；Esc 关闭，全屏按钮独立切换
-  - [x] 播放队列面板：当前歌单列表、当前播放高亮、点击直接切歌
-  - [x] 定时关闭：15/30/60/90/120 分钟，到期自动暂停，可取消
-  - [x] 输出设备选择：枚举 WASAPI/mmdevice 设备并切换（写入 audio.outputDevice，重启恢复）
-  - [x] 防熄屏：播放时 SetThreadExecutionState 阻止息屏/休眠
-  - [x] **整首缓存 + 预取下一首**：播放时后台把整首音频下载到 ~/.bilimusic/cache，
-        完成后自动切本地播放（拖动进度条秒响应）；同时预取紧随其后的一首，切歌即本地开播。
-        侧栏「播放缓存」可配置网络缓存范围（2/5/10/20 秒，默认 5）、清除播放缓存
-  - [x] 左侧栏可折叠/展开（标题栏左侧箭头或 Ctrl+B，带宽度动画，状态记忆）
-  - M4 核心项全部完成 ✅（歌词页 Java 版本身也没有做）
-- [x] **M5：打包分发**
-  - 内置 VLC（复用 Java 版 portable 的 `vlc/`：libvlc + libvlccore + 369 个插件，135MB）
-  - 免安装 zip + 自解压安装器（官方 7zSD.sfx + LZMA1 载荷，`install.bat` / `uninstall.bat`）
-  - 实测：启动 **0.66–0.81s**、Working Set **215–241MB**、portable zip **60.6MB**、
-    setup.exe **37.3MB**（Java 版对应约 3.2s / 430MB / 132.6MB / 102.7MB）
+## 功能明细
+
+### 基础与 UI
+
+- CMake + MinGW-w64 构建，依赖全部内嵌在 `third_party/`（ImGui / GLFW / nlohmann-json / qrcodegen / stb），不需要 Qt、vcpkg、Visual Studio
+- 无边框自绘窗口：标题栏 `WM_NCHITTEST` 返回 `HTCAPTION` 交系统 modal 拖动，四边/四角返回 `HT*` 原生缩放，`WM_GETMINMAXINFO` 最大化不盖任务栏
+- 深色主题（`ui/Theme`）、Material Icons 合并进正文、微软雅黑 Bold、行高与表格同步
+- **彩色 emoji**：`ui/EmojiAtlas` 用 WIC + Direct2D + DirectWrite 把 Segoe UI Emoji 光栅化成 GL 纹理，富文本路径（`buildRichItems` / `drawRichTextImpl`）按字形混排彩色 emoji 与图标
+- 侧栏可整体折叠（标题栏箭头 / `Ctrl+B`，带宽度动画、状态记忆）；底部「功能」入口可单独折叠；每行右侧 `?` 按钮带说明 tooltip
+
+### 登录与在线播放
+
+- Cookie 登录（读写与 Java 版共用的 `settings.json` 的 `cookie_blob`）+ 扫码登录（`qrcode/generate` + `qrcode/poll`，内置 qrcodegen 编码、ImGui 直接画）
+- WBI 签名：nav 取 `img_url`/`sub_url` → 重排表得 mixin_key（缓存 24h）→ 参数加 `wts` 排序 → MD5 得 `w_rid`
+- `x/web-interface/view` 取 cid/标题/UP主/时长；`x/player/wbi/playurl`（fnval=4048）取流，失败强刷 WBI key 重试，再退 `x/player/playurl`
+- 音质档位：自动 / 192K / 132K / 64K / Hi-Res / 杜比，写入 `audio_quality`（与 Java 版共用）；降级链 + 最高带宽兜底 + durl 兜底
+- 在线播放带 `http-referrer` / `http-user-agent`（否则 bilivideo 403）；备用地址切换 + 6s 看门狗强制重取流
+- 网络缓存可配置（2/5/10/20 秒，默认 5，历史默认 20）
+- 音量走 WASAPI `ISimpleAudioVolume`（不经过 VLC），写入节流 + 会话过期重建检测，避免「一炸一炸」
+
+### 歌单管理
+
+- `data/LibraryStore` 读写 `playlists.json`（与 Java 版同格式，临时文件 + 改名安全落盘）
+- 新建 / 重命名 / 删除 / 排序；重名处理（覆盖 / 自动 `(n)` / 取消），规则与 Java 版 `PlaylistNaming` 一致
+- 导入收藏夹 / 稍后再看 / UP 主投稿 / 合集系列，实时进度；同来源重复导入复用原歌单
+- 多选：全选 / 清空 / 复制 / 移动（按 bvid+cid 去重）/ 批量删除
+- 封面三种来源：从歌单视频选（缩略图列表 + 大图预览）/ 本地图片（复制进 `covers/`，stb_image + GL 纹理）/ 网络封面异步缓存
+- 下载当前曲目到 `~/.bilimusic/downloads`；本地音乐扫描（mp3/flac/wav/m4a/aac/ogg/opus/wma/ape）
+
+### 体验
+
+- 系统托盘：显示 / 播放暂停 / 上一首 / 下一首 / 退出；关闭按钮收进托盘，托盘退出才真退出
+- 全局键盘钩子：媒体键 + `Ctrl+Alt+Space` / `←` / `→` + `Ctrl+Alt+H`（窗口隐藏也生效）
+- 窗口内快捷键：空格、`←`/`→` 快退快进 3s、`[`/`]` 上一首/下一首（沉浸模式同）
+- 沉浸模式：点播放条封面自下而上滑入、桌面壁纸高斯模糊背景、全屏按钮、真实频谱（WASAPI loopback + 1024 点 FFT）、鼠标 3s 空闲隐藏、滚轮 ±1% 音量、`Esc` 关闭
+- 播放队列面板、定时关闭（15–120 分钟）、输出设备选择、防熄屏（`SetThreadExecutionState`）
+- **整首缓存 + 预取下一首**：后台把整首音频下载到 `~/.bilimusic/cache`，完成后切本地播放（seek 秒响应），并预取紧随其后的一首；侧栏「播放缓存」可开关整首缓存、立即缓存、清除缓存
+- 窗口位置/大小 + 音量记忆；空闲时播放条显示 BM 图标
+
+### 分发
+
+- 内置 VLC（`libvlc` + `libvlccore` + 369 个 plugins，约 135MB）
+- 免安装 zip（60.6MB）+ NSIS 安装向导（32.1MB，Modern UI 2 简体中文，按用户安装免 UAC，可选桌面快捷方式，注册卸载项）
+- 实测：启动 **0.66–0.81s**、Working Set **215–241MB**、exe **5.65MB**
+
+## v1.0.1 相比 v1.0.0 的修复
+
+| 内容 | 关键实现 |
+| --- | --- |
+| 后台自动切歌（收进托盘也生效） | `App::tick()` 移出 `draw()`，主循环每帧调用；`checkTrackEnd()` 判 `VlcEngine::ended()` 或位置接近总时长且非用户暂停；`autoNextHandledSongId_` 防重复 |
+| 进度条大跨度 seek 回弹 | `requestSeekPreview()` 预览保持 15s；1.2s 未动重试；3s 未动重载媒体；失败提示「这个位置暂时不能跳转」 |
+| 彩色 emoji | `ui/EmojiAtlas`（D2D/DWrite 光栅化）+ `Components` 富文本，`TextEllipsis`/`drawTextAt` 走富文本 |
+| 输出设备枚举兜底 | `VlcEngine::audioOutputDevices()` 在 VLC 枚举失败时用 `IMMDeviceEnumerator` 兜底；`applyOutputDevice()` 写 mmdevice endpoint id |
+| 侧栏折叠 + 每行 `?` 提示 | `Sidebar` 的 `actionsExpanded` 分支与 Info 按钮；状态存 `ui.sidebar_actions_expanded` |
+| 任务栏图标 / AUMID | 数字图标 ID + `SetCurrentProcessExplicitAppUserModelID` |
+| NSIS 现代化安装器 | 替换 7zSD SFX（自定义 SFX 曾被卡巴斯基删文件），MUI2 + 中文 + 品牌图 |
+| 整首缓存开关 | `audio.full_cache` |
 
 ## 构建
 
-要求：CMake 3.20+、MinGW-w64（g++ 13+）。**不需要 Qt / vcpkg / Visual Studio。**
+要求：CMake 3.20+、MinGW-w64（w64devkit，g++ 13+）。**不需要 Qt / vcpkg / Visual Studio。**
+
+> 构建前先结束正在运行的实例，否则链接会报 `cannot open output file bilimusic.exe: Permission denied`。
 
 ```powershell
+Get-Process bilimusic -ErrorAction SilentlyContinue | Stop-Process -Force
+
 # 用仓库自带的脚本（自动找 ../tools 下便携版 MinGW + CMake）
-.\\scripts\\build.ps1
+.\scripts\build.ps1            # Release（GUI 子系统）
+.\scripts\build.ps1 -Console   # 控制台版，方便看 stderr / VLC 日志
+.\scripts\build.ps1 -Clean     # 清理后重建
 
 # 或者手动
 cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j 8
 ```
 
-产物：`build\\bilimusic.exe`（运行时需要能加载 libVLC：优先找 exe 旁边的 `vlc\\libvlc.dll`，
-其次系统安装的 VLC；也可以设置环境变量 `BILIMUSIC_VLC_DIR` 指向 VLC 目录）。
+产物：`build\bilimusic.exe`、`build\assets\MaterialIcons-Regular.ttf`。
 
-## 打包（M5）
+运行时查找 VLC 的顺序（`VlcEngine::init`）：`BILIMUSIC_VLC_DIR` → `<exe目录>\vlc\libvlc.dll` → `<exe目录>\libvlc.dll` → `C:\Program Files\VideoLAN\VLC`。
+开发版旁边没有 `vlc/`，会回退系统 VLC；安装版用自带内核。
+
+自检入口：
+
+| 命令 | 用途 |
+| --- | --- |
+| `bilimusic.exe --test-pause <本地音频>` | WASAPI 峰值采样验证暂停/恢复不断音 |
+| `bilimusic.exe --test-pause-online <BV号>` | 同上，走在线流 |
+| `bilimusic.exe --check-bili <BV号>` | 控制台自检：nav 登录态 / view 取 cid / playurl 取流 |
+| `bilimusic.exe --qr-test` | 扫码登录自检 |
+
+环境变量：`BILIMUSIC_RESUME_PLAY`、`BILIMUSIC_TEST_NO_VOLUME`、`BILIMUSIC_VLC_VERBOSE`。
+
+## 打包
+
+需要 NSIS 3.x（解压 portable 版到 `../tools/nsis`，或设置 `NSIS_DIR`；不在仓库里）。
 
 ```powershell
-# 需要 NSIS 3.x：把 portable 版解压到 ../tools/nsis（或设置环境变量 NSIS_DIR）
-# 构建 + 打 zip + 打安装器 + 自检 + 冒烟测试
-.\scripts\package.ps1
-
-# 复用现有 build 产物（跳过重新编译）
-.\scripts\package.ps1 -SkipBuild
+Get-Process bilimusic -ErrorAction SilentlyContinue | Stop-Process -Force
+.\scripts\package.ps1              # 构建 + 打 zip + 打安装器 + 自检 + 冒烟测试
+.\scripts\package.ps1 -SkipBuild   # 复用现有 build 产物
+.\scripts\package.ps1 -SkipRuntime # 跳过冒烟测试
 ```
 
-产物：
-
-| 文件 | 说明 |
+| 产物 | 说明 |
 | --- | --- |
-| `build\dist\bilimusic-cpp-portable-win64.zip` | 免安装包（解压即用，内置 vlc/） |
-| `build\dist\bilimusic-cpp-setup.exe` | NSIS 安装向导（Modern UI 2，简体中文）：欢迎 / 安装目录 / 组件 / 完成页，按用户安装（无需 UAC、无需管理员），默认装到 `%LOCALAPPDATA%\Programs\bilimusic`，开始菜单 + 可选桌面快捷方式，注册「应用和功能」卸载项，支持 `/S` 静默安装 |
+| `build\dist\bilimusic-cpp-portable-win64.zip` | 免安装包（解压即用，内置 `vlc/`，约 60.6MB） |
+| `build\dist\bilimusic-cpp-setup.exe` | NSIS 安装向导（MUI2 简体中文），按用户安装免 UAC，默认 `%LOCALAPPDATA%\Programs\bilimusic`，开始菜单 + 可选桌面快捷方式 + HKCU 卸载项，支持 `/S` 静默安装，约 32.1MB |
 
 实现说明：
 
-- 安装器脚本：`scripts/packaging/bilimusic.nsi`（Modern UI 2 + SimpChinese）；品牌图
-  `installer-welcome.bmp` / `installer-header.bmp` 由应用图标生成，窗口/安装器图标与版本信息（1.0.0）同主程序。
-- 载荷（exe + assets + vlc/ + readme）由 NSIS `File /r` 打进 setup.exe（SOLID LZMA）；
-  免安装 zip 用 PowerShell `Compress-Archive` 生成。
-- 卸载器删除快捷方式、注册表和安装目录（自删除用临时 bat 延迟清理），并可选择是否删除
-  `%USERPROFILE%\.bilimusic` 里的歌单与登录信息。
-- 打包脚本自检 exe/setup 版本号与载荷完整性，最后从 staging 启动一次 exe，输出启动耗时与 Working Set。
-- 未做数字签名（需要代码签名证书）；如需彻底消除 SmartScreen 提示需自行签名 setup.exe。
+- 安装器脚本 `scripts/packaging/bilimusic.nsi`（**必须保留 UTF-8 BOM**，否则 makensis 报 "Bad text encoding"）；品牌图 `installer-welcome.bmp`（164x314）/ `installer-header.bmp`（150x57）
+- 载荷由 NSIS `File /r` 打进 setup.exe（SOLID LZMA）；免安装 zip 用 PowerShell `Compress-Archive` 生成
+- 版本号单一来源：`CMakeLists.txt` 的 `project(... VERSION x.y.z)` 同时进 `BILIMUSIC_VERSION` 宏、exe VERSIONINFO、安装器与注册表 `DisplayVersion`
+- 静默安装：`bilimusic-cpp-setup.exe /S /D=D:\bilimusic`（`/D` 必须最后且不带引号）；静默卸载 `D:\bilimusic\uninstall.exe /S`
+- 未做数字签名，SmartScreen 会提示「未知发布者」；**不要**为了消提示改回自制 SFX（会被杀软针对）
 
 ## 目录结构
 
 ```
 src/
-  main.cpp              GLFW + ImGui 生命周期
-  app/App.{h,cpp}       应用状态 + 动作分发
-  ui/Theme.{h,cpp}      设计 token（颜色/尺寸/字体，对应 Java 版 BmTheme.kt）
-  ui/Components.{h,cpp} 模块化控件（按钮/滑块/封面占位/标签/文本）
-  ui/Icons.h            Material Icons 码点 + UTF-8 编码
-  ui/TitleBar.{h,cpp}   无边框自绘标题栏（拖动 / 窗口按钮）
-  ui/Sidebar.{h,cpp}    侧栏
-  ui/PlaylistPage.{h,cpp} 歌单页
-  ui/PlayBar.{h,cpp}    底部播放条
-  media/VlcEngine.{h,cpp}  libVLC 动态加载封装（播放/暂停/进度/音量）
-  data/LibraryStore.{h,cpp} 读取 playlists.json（与 Java 版共用格式）
-third_party/            imgui / glfw / nlohmann-json / icons（源码内嵌）
-scripts/build.ps1       一键构建
+  main.cpp                    GLFW + ImGui 生命周期；主循环调用 app.tick()；自检入口
+  app/App.{h,cpp}             应用状态机 + 动作分发
+  ui/
+    Theme.{h,cpp}             颜色/尺寸/字体（对应 Java 版 BmTheme.kt）
+    Components.{h,cpp}        控件库 + 富文本绘制（emoji 纹理）
+    Icons.h                   Material Icons 码点
+    TitleBar / WindowFrame    自绘标题栏 + Win32 原生拖动/缩放
+    Sidebar.{h,cpp}           侧栏（折叠 + 底部功能入口 + 说明提示）
+    PlaylistPage.{h,cpp}      歌单页 + 曲目表 + 多选 + 菜单
+    PlayBar.{h,cpp}           底部播放条
+    ImageCache.{h,cpp}        封面下载 + GL 纹理 + 桌面壁纸高斯模糊
+    EmojiAtlas.{h,cpp}        彩色 emoji 纹理缓存（D2D/DWrite）
+    AppIcon.h                 内嵌多尺寸 BM 图标
+  media/
+    VlcEngine.{h,cpp}         libVLC 封装：播放/暂停/seek/音量/输出设备/ended()
+    AppVolume.{h,cpp}         WASAPI 应用级音量（+ loopback 峰值）
+    AudioSpectrum.{h,cpp}     loopback 采集 + 1024 FFT + 32 对数频段
+  bili/BiliService.{h,cpp}    QR 登录、WBI、取流、歌单导入、下载
+  data/LibraryStore.{h,cpp}   playlists.json 读写（Java 同格式）
+  net/HttpClient.{h,cpp}      WinHTTP 封装
+  platform/SystemTray.{h,cpp} 托盘图标 + 全局键盘钩子
+  util/{AppLog,Md5,QrCode}    日志 / MD5 / 二维码矩阵
+  resources/app.rc.in         exe 图标（数字 ID 1）+ VERSIONINFO
+third_party/                  imgui / glfw / nlohmann / icons / qrcodegen / stb
+scripts/                      build.ps1 / package.ps1 / packaging/
 ```
+
+## 数据目录（与 Java 版共用）
+
+`%USERPROFILE%\.bilimusic\`：`playlists.json`（歌单/曲目）、`settings.json`（Cookie/音量/窗口/缓存/输出设备/侧栏状态）、`cache/`（整首缓存）、`downloads/`、`covers/`、`cpp-app.log`。
+
+两个版本**不要同时运行**：没有单实例锁，窗口几何/音量/Cookie/歌单会互相覆盖。
 
 ## 和 Java 版的关系
 
-- 数据目录、`playlists.json` 格式完全兼容，两个版本可以共用一个数据目录
-- 接口相关逻辑（WBI 签名、Cookie、取流）会在 M2 从 Kotlin 版 1:1 移植到 C++
-- Java 版继续作为稳定版；C++ 版达到功能对等后再决定分发策略
+- `playlists.json` / `settings.json` 格式完全兼容，两个版本可来回切换、共用数据目录
+- 本机默认使用 C++ 版（`D:\bilimusic`）；Java 桌面版作为参考/回退，`source/` 供行为对照
+- C++ 侧的自动切歌 / seek / emoji / NSIS 等修复不会自动回流 Java（除非明确要求）
+- Android 端不受影响，按 Java 仓库继续维护
+
+## 已知限制
+
+- 没有单实例保护（`CreateMutex` 待加），多开会抢数据
+- 大跨度 seek 在网络流上仍可能慢：预览最多 15s，1.2s 重试、3s 硬重载；VLC 完全不可 seek 时只提示不重试
+- 输出设备切换只做了界面与持久化验证，未做声学路由验证
+- 彩色 emoji 只覆盖富文本路径；队列/弹窗里仍是 Material 图标占位
+- 未实现：全局搜索页、排行榜、歌词页（Java 版也没有歌词页）
+- 无代码签名、无自动更新；`cpp-app.log` 无轮转
 
 ## 依赖与许可
 
@@ -194,6 +199,8 @@ scripts/build.ps1       一键构建
 | Dear ImGui | 1.93.0 | MIT |
 | GLFW | 3.5.1 | zlib/libpng |
 | nlohmann/json | 3.12.0 | MIT |
-| libVLC | 3.x（运行时） | LGPL/GPL |
+| qrcodegen (Nayuki) | 1.8.0 | MIT |
+| stb_image | 2.30 | public domain / MIT |
+| libVLC | 3.0.21（运行时） | LGPL/GPL |
 
 本项目代码：MIT（见 `LICENSE`）。

@@ -1,6 +1,6 @@
 # 路线图（C++ 桌面版）
 
-目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端；功能对齐后可以作为轻量、免 JRE 的分发版本。
+目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端。**M1–M5 已全部完成，当前版本 v1.0.1，可日常使用。**
 
 ## M1 · 工程骨架 + 播放内核（已完成）
 
@@ -19,7 +19,7 @@
 - [x] 可复用控件库：IconButton、PrimaryButton、GhostButton、SidebarAction、PlayCircleButton、ThinSlider、CoverPlaceholder、TagChip
 - [x] Material Icons 字体合并进正文字体，按钮图标与 Java 版对应
 - [x] 播放模式按钮、上一首/下一首、进度拖动、音量拖动已接到 libVLC
-- [x] emoji 标题显示降级（替换成音符图标，数据不动）
+- [x] emoji 标题显示降级（最初替换成音符图标；v1.0.x 已升级为彩色 emoji，见下）
 
 ## M1.6 · 交互与渲染修复（已完成）
 
@@ -38,63 +38,81 @@
 - [x] 在线播放（libVLC + Referer/UA）、上一首/下一首自动取流、粘贴 BV 弹窗
 - [x] 音质档位 UI（自动/192K/132K/64K/Hi-Res/杜比，写入 audio_quality 与 Java 共用）
 - [x] 备用 URL 自动切换 + 起播无进度时强制重新取流（URL 过期兜底）
-- [x] 网络缓存 20s
+- [x] 网络缓存 20s（后可配置 2/5/10/20s，默认 5）
 - [x] 扫码登录（qrcodegen 编码 + poll 轮询 + Set-Cookie 导入）
 
-## M2 之后
+## M3 · 歌单导入与管理（已完成）
 
-从 Kotlin 版 `shared/` 1:1 移植：
+- [x] 收藏夹列表 / 稍后再看 / UP主投稿 / 合集（season）导入，实时进度条
+- [x] 歌单新建 / 重命名 / 删除 / 排序（重名规则对齐 Java 版：覆盖 / 自动重命名 (n) / 取消）
+- [x] 曲目多选：复制到歌单 / 移动到歌单 / 批量删除（按 bvid+cid 去重）
+- [x] 歌单封面：从视频封面选 / 本地图片 / 渐变占位；网络封面异步缓存
+- [x] 离线缓存：下载当前曲目到 ~/.bilimusic/downloads/
+- [x] 本地音乐扫描（mp3/flac/wav/m4a/aac/ogg/opus/wma/ape）
 
-- [ ] WBI 签名（`WbiSigner.kt`，MD5 + 混淆表）
-- [ ] Cookie 登录（扫码登录 + 手动粘贴 Cookie）、Cookie 持久化
-- [ ] 取流接口（`/x/player/wbi/playurl`）+ 音质降级链（192K → 132K → 64K → Hi-Res/杜比）
-- [ ] 视频详情（拿 cid）、URL 过期重取（5 分钟安全余量）
-- [ ] 在线播放：libvlc 需要带 `:http-referrer=https://www.bilibili.com/` 和 UA
-
-## M3 · 歌单导入与管理
-
-- [ ] 收藏夹列表 / 稍后再看 / UP主投稿 / 合集（season）导入，实时进度条
-- [ ] 歌单新建 / 重命名 / 删除 / 排序（重名规则对齐 Java 版：覆盖 / 自动重命名 (n) / 取消）
-- [ ] 曲目多选：复制到歌单 / 移动到歌单 / 删除
-- [ ] 离线缓存：下载当前曲目到 ~/.bilimusic/downloads/，离线优先播放
-
-## M4 · 体验对齐
+## M4 · 体验对齐（已完成）
 
 - [x] 封面图（网络图异步缓存 + 自定义本地图，ContentScale.Crop 裁切）
-- [x] 沉浸模式（全屏 / 封面背景 / 大封面 / 进度 + 控制 / F11·Esc）
+- [x] 沉浸模式（自下而上滑入 / 壁纸模糊背景 / 真实频谱 / 全屏 / 滚轮音量 / 鼠标空闲隐藏）
 - [x] 播放模式（顺序 / 列表循环 / 单曲循环 / 随机）
-- [x] 系统托盘（图标 + 菜单：显示窗口 / 播放暂停 / 上一首 / 下一首 / 退出；关闭收进托盘）
-- [x] 全局媒体快捷键（媒体键 播放暂停 / 上一首 / 下一首）
+- [x] 系统托盘（图标 + 菜单；关闭收进托盘）
+- [x] 全局媒体键 + Ctrl+Alt+Space/←/→/H
+- [x] 窗口内快捷键：空格、←/→ 3s、[ / ]
 - [x] 定时关闭、防熄屏
-- [x] 输出设备选择（WASAPI/mmdevice 枚举 + 切换 + 持久化）
+- [x] 输出设备选择（WASAPI/mmdevice 枚举 + 切换 + 持久化；VLC 枚举失败用 IMMDeviceEnumerator 兜底）
 - [x] 播放队列面板（高亮当前、点击切歌）
-- [x] 本地音乐扫描（扫描目录）
-- [x] 下载当前曲目到 ~/.bilimusic/downloads
+- [x] 整首缓存 + 预取下一首（`~/.bilimusic/cache`，命中即本地播放）
+- [x] 侧栏整体折叠 + 底部功能入口折叠
 
 ## M5 · 打包分发（已完成）
 
 - [x] 内置 VLC（复用 Java 版 portable 的 vlc/ 目录：libvlc + libvlccore + plugins，369 文件 / 135MB）
-- [x] 免安装 zip + 自解压安装器（官方 7zSD.sfx + py7zr 写 LZMA1 载荷，
-      `scripts/package.ps1`；安装脚本带桌面/开始菜单快捷方式与卸载注册项）
-- [x] 体积/内存/启动时间对比 Java 版，记录在 README（见下）
+- [x] 免安装 zip（60.6MB）+ **NSIS 安装向导**（32.1MB，MUI2 简体中文，按用户安装免 UAC）
+    - 历史：早期用 7zSD.sfx + py7zr 写 LZMA1 载荷；自定义 SFX 曾被卡巴斯基删文件，已废弃并换成官方 NSIS
+- [x] 体积/内存/启动时间对比 Java 版：启动 0.66–0.81s、Working Set 215–241MB（Java 版约 3.2s / 430MB）
+- [x] exe VERSIONINFO / 安装器图标 / 注册表 DisplayVersion 统一来自 CMake VERSION
 
-## 功能对等清单（用来判断什么时候能替换 Java 版）
+## v1.0.x 增补（v1.0.0 之后）
 
-| 能力 | Java 版 | C++ M1 | 目标里程碑 |
+- [x] 自动切歌（收进托盘也生效）：`App::tick()` 从 `draw()` 移出 + `VlcEngine::ended()`
+- [x] 进度条大跨度 seek 不回弹：15s 预览保持 + 1.2s 重试 + 3s 硬重载
+- [x] 彩色 emoji（EmojiAtlas，D2D/DWrite 光栅化 + 富文本混排）
+- [x] 输出设备枚举兜底（WASAPI IMMDeviceEnumerator）
+- [x] 侧栏「功能」折叠箭头 / 每行 ? 提示
+- [x] 任务栏图标（AUMID + 数字图标 ID）
+- [x] 整首缓存开关（`audio.full_cache`）
+
+## 功能对等清单
+
+| 能力 | Java 版 | C++ 版 | 状态 |
 | --- | --- | --- | --- |
-| 本地音乐播放 | 支持 | 支持 | M1 |
-| 在线播放（WBI 取流） | 支持 | 待做 | M2 |
-| 扫码/Cookie 登录 | 支持 | 待做 | M2 |
-| 四种来源导入歌单 | 支持 | 待做 | M3 |
-| 歌单重名处理 | 支持 | 待做 | M3 |
-| 离线缓存 | 支持 | 待做 | M3 |
-| 沉浸模式 / 封面 / 歌词 | 支持 | 待做 | M4 |
-| 托盘 / 全局快捷键 / 防熄屏 | 支持 | 待做 | M4 |
-| 打包体积/内存/启动 | zip 132.6MB、setup 102.7MB、Working Set ~430MB、启动 ~3.2s | zip 60.6MB、setup 37.3MB、Working Set 215–241MB、启动 0.66–0.81s | ✅ M5 |
+| 本地音乐播放 | 支持 | 支持 | ✅ |
+| 在线播放（WBI 取流） | 支持 | 支持 | ✅ |
+| 扫码/Cookie 登录 | 支持 | 支持 | ✅ |
+| 四种来源导入歌单 | 支持 | 支持 | ✅ |
+| 歌单重名处理 | 支持 | 支持 | ✅ |
+| 离线缓存 | 支持 | 支持 | ✅ |
+| 沉浸模式 / 封面 | 支持 | 支持 | ✅ |
+| 歌词页 | 无 | 无 | —（两边都没做） |
+| 托盘 / 全局快捷键 / 防熄屏 | 支持 | 支持 | ✅ |
+| 单实例保护 | 支持（SingleInstance.kt） | **缺** | 待做 |
+| 打包体积/内存/启动 | zip 132.6MB、setup 102.7MB、~430MB、~3.2s | zip 60.6MB、setup 32.1MB、215–241MB、0.66–0.81s | ✅ |
+
+## 后续（按优先级）
+
+- **P0** 文档保持真实（README / ROADMAP 与代码同步）；每次发版 bump CMake VERSION
+- **P1** 单实例保护：`CreateMutex` + 激活已有窗口，避免安装版/开发版/多开抢数据
+- **P1** seek 稳定性：改用 libVLC 媒体播放器事件（PositionChanged / EndReached）替代轮询兜底
+- **P1** 输出设备：切换后做实际路由验证（WASAPI 会话/设备峰值），必要时重启 player 生效
+- **P2** `App.cpp`（约 3300 行）拆成 PlayerController / PlaylistController / AuthController；补关键路径测试
+- **P2** 统一富文本：队列/弹窗剩余 `TextUnformatted` 调用改用 Rich text
+- **P3** 性能：封面/emoji 纹理缓存上限、日志轮转、启动预加载
 
 ## 技术决策记录
 
 - **UI 用 Dear ImGui 而不是 Qt**：M1 阶段优先「零第三方 SDK、构建简单、立刻能迭代」。Qt 需要安装 Qt SDK（几 GB）或 vcpkg 编译数小时，对当前目标不划算。ImGui 外观可定制到接近深色音乐播放器，但复杂动画/富文本能力有限；如果后续需要在 UI 上投入更多，可以评估迁移到 Qt6（业务层与 UI 解耦）。
-- **libVLC 动态加载（LoadLibrary + GetProcAddress）**：不依赖 VLC SDK 头文件/import lib，打包时只要带 libvlc.dll + libvlccore.dll + plugins 即可；后续要完整 API（事件、输出设备）时可换成官方 vlc/*.h。
-- **数据格式与 Java 版共用**：playlists.json 直接读，两个版本可以来回切换、不打架。
+- **libVLC 动态加载（LoadLibrary + GetProcAddress）**：不依赖 VLC SDK 头文件/import lib，打包时只要带 libvlc.dll + libvlccore.dll + plugins 即可。
+- **WASAPI 应用级音量而不是 VLC 音量**：VLC 的音量写入自带短斜坡，高频重写会周期性爆音；改用会话级音量后拖动即时生效，且不会被换曲重置。
+- **数据格式与 Java 版共用**：playlists.json / settings.json 直接读写，两个版本可以来回切换。
 - **MinGW 静态链接**：避免安装版还要附带 libstdc++/libgcc/winpthread 三个 DLL。
+- **安装器用官方 NSIS，不用自制 SFX**：7zSD 自定义 SFX 会被杀软误报删文件；NSIS 3.10 的 MUI2 体积更小、可按用户安装、可静默安装。

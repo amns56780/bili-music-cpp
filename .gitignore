@@ -13,3 +13,6 @@ compile_commands.json
 CMakeUserPresets.json
 dist/
 build/package/
+
+# 本机交接文档（含机器绝对路径，只保留在本地）
+docs/HANDOVER.md

@@ -48,7 +48,7 @@ SetDatablockOptimize on
 CRCCheck on
 XPStyle on
 
-VIProductVersion "1.0.0.0"
+VIProductVersion "${APPVERSION}.0"
 VIAddVersionKey /LANG=2052 "ProductName" "${APPNAME}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${APPVERSION}.0"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APPVERSION}.0"
