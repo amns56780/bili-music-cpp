@@ -57,7 +57,7 @@ public:
     bool userPaused() const { return pausedRequested_; }
     int64_t positionMs() const;
     int64_t lengthMs() const;
-    void seekMs(int64_t ms);
+    int seekMs(int64_t ms);  // 0 成功，<0 表示当前媒体不可 seek（例如流还没拿到可 seek 的信息）
 
     // 音量：优先走 WASAPI 应用级音量（绕开 VLC，立即生效）；不可用时回退 libvlc。
     // App 每帧调用 pumpVolume()，保证 VLC 自己重置会话音量时也能被纠正回来。

@@ -306,6 +306,11 @@ private:
     uint64_t playbackOverrideUntil_ = 0;
     double seekPreviewMs_ = -1.0;
     uint64_t seekPreviewUntil_ = 0;
+    uint64_t seekPreviewStartTick_ = 0;
+    bool seekPreviewSlowShown_ = false;
+    double seekPreviewOriginMs_ = 0.0;  // seek 前引擎位置（用于检测 seek 是否真的生效）
+    int seekRetryCount_ = 0;
+    bool seekHardReloadTried_ = false;
 
     // 播放缓存范围（秒）：2/5/10/20，写入 audio.network_cache
     int networkCacheSeconds_ = 5;

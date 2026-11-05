@@ -668,17 +668,25 @@ void App::seekRelative(double seconds) {
     double target = base + seconds * 1000.0;
     if (target < 0.0) target = 0.0;
     if (target > durationMs_) target = durationMs_ > 1000.0 ? durationMs_ - 1000.0 : 0.0;
-    engine_.seekMs((int64_t)target);
-    requestSeekPreview(target);
+    const int seekResult = engine_.seekMs((int64_t)target);
+    if (seekResult >= 0) requestSeekPreview(target);
     AppLog::info("App", std::string(seconds < 0 ? "快退 " : "快进 ") +
-                            std::to_string((int)std::abs(seconds)) + " 秒");
+                            std::to_string((int)std::abs(seconds)) + " 秒 rc=" +
+                            std::to_string(seekResult));
     setStatus(std::string(seconds < 0 ? "快退 " : "快进 ") +
               std::to_string((int)std::abs(seconds)) + " 秒");
 }
 
 void App::requestSeekPreview(double positionMs) {
     seekPreviewMs_ = positionMs;
-    seekPreviewUntil_ = GetTickCount64() + 1500;
+    // 大跨度 seek（尤其网络流）VLC 要重新取数据/重新缓冲，之前固定 1.5s 会超时回弹；
+    // 这里保持到引擎真正跳到目标附近，最多等 12s（失败时再看引擎位置决定是否回退）。
+    seekPreviewUntil_ = GetTickCount64() + 15000;
+    seekPreviewStartTick_ = GetTickCount64();
+    seekPreviewSlowShown_ = false;
+    seekPreviewOriginMs_ = positionMs_;
+    seekRetryCount_ = 0;
+    seekHardReloadTried_ = false;
     positionMs_ = positionMs;
 }
 
@@ -713,11 +721,67 @@ void App::syncPlaybackState() {
     }
     engine_.pumpVolume();
     volume_ = engine_.volume();
-    // seek 预览：松手后用目标位置显示，等引擎位置追上（或超时）再切回真实位置
+    // seek 预览：松手后用目标位置显示，等引擎真正跳到目标附近再切回真实位置。
+    // 大跨度 seek（尤其是网络流）VLC 需要重新取流/缓冲，之前固定 1.5s 会超时回弹。
     if (seekPreviewMs_ >= 0.0) {
-        const bool caughtUp = std::abs(positionMs_ - seekPreviewMs_) < 1500.0;
-        if (caughtUp || GetTickCount64() > seekPreviewUntil_) {
+        const double distance = std::abs(positionMs_ - seekPreviewMs_);
+        const bool caughtUp = distance < 1200.0;
+        const bool timedOut = GetTickCount64() > seekPreviewUntil_;
+        const uint64_t seekElapsed = GetTickCount64() - seekPreviewStartTick_;
+        // VLC 偶尔 set_time 返回成功但实际没跳（尤其在刚起播/状态切换时）：
+        // 1.2s 后引擎位置还停在原处就重试一次；重试两次仍没动就明确失败，避免假装跳转。
+        if (!caughtUp && !engine_.userPaused() && seekElapsed > 1200 &&
+            std::abs(positionMs_ - seekPreviewOriginMs_) < 600.0 && seekRetryCount_ < 2) {
+            ++seekRetryCount_;
+            AppLog::warn("App", "seek 未生效，重试第 " + std::to_string(seekRetryCount_) + " 次");
+            engine_.seekMs((int64_t)seekPreviewMs_);
+            positionMs_ = seekPreviewMs_;
+            return;
+        }
+        if (!caughtUp && !engine_.userPaused() && seekElapsed > 3000 &&
+            !seekHardReloadTried_ && std::abs(positionMs_ - seekPreviewOriginMs_) < 900.0) {
+            // 重试也不行：重载当前媒体（本地文件 / 已缓存 / 在线重新取流）再跳到目标
+            seekHardReloadTried_ = true;
+            AppLog::warn("App", "seek 多次未生效，重载媒体后跳转");
+            const std::string targetTitle = playingTitle_;
+            bool reloaded = false;
+            std::string error;
+            const StoredSong* song = findSong(playingSongId_);
+            if (song != nullptr && !song->localPath.empty()) {
+                reloaded = engine_.playPath(utf8ToWide(song->localPath), &error);
+            }
+            if (!reloaded) {
+                const std::wstring cachePath = playbackCacheFile(curBvid_, qualityId_);
+                if (cacheFileUsable(cachePath)) {
+                    reloaded = engine_.playPath(cachePath, &error);
+                }
+            }
+            if (reloaded) {
+                engine_.setVolume(volume_);
+                engine_.seekMs((int64_t)seekPreviewMs_);
+            } else if (!curBvid_.empty() && curCid_ > 0) {
+                pendingSeekMs_ = seekPreviewMs_;
+                startOnlinePlayFor(playingSongId_, curBvid_, curCid_, targetTitle, playingArtist_);
+                reloaded = true;
+            }
+            if (reloaded) {
+                positionMs_ = seekPreviewMs_;
+                return;
+            }
+        }
+        if (caughtUp) {
             seekPreviewMs_ = -1.0;
+        } else if (timedOut && !engine_.userPaused()) {
+            AppLog::warn("App", "seek 超时（差值 " + std::to_string((int)distance) +
+                                    "ms），回退到实际位置");
+            seekPreviewMs_ = -1.0;
+            setStatus("跳转较慢，已保持原位置");
+        } else if (!seekPreviewSlowShown_ &&
+                   GetTickCount64() - seekPreviewStartTick_ > 1500) {
+            // 预计要明显等待了：先提示，避免以为没反应
+            seekPreviewSlowShown_ = true;
+            setStatus("正在跳转…");
+            positionMs_ = seekPreviewMs_;
         } else {
             positionMs_ = seekPreviewMs_;
         }
@@ -1254,8 +1318,10 @@ void App::drawImmersive() {
         immersiveSeeking = false;
         if (durationMs_ > 0.0) {
             const double target = sliderValue * durationMs_;
-            engine_.seekMs((int64_t)target);
-            requestSeekPreview(target);
+            const int seekResult = engine_.seekMs((int64_t)target);
+            AppLog::info("App", "seek（沉浸模式）-> " + std::to_string((int)target) +
+                                    " ms rc=" + std::to_string(seekResult));
+            if (seekResult >= 0) requestSeekPreview(target);
         }
     }
     auto formatMs = [](double ms) {
@@ -3197,8 +3263,14 @@ void App::draw() {
         setStatus("播放模式：" + formatModeName(mode_));
     }
     if (playBarActions.seekFinished) {
-        engine_.seekMs((int64_t)playBarActions.seekMs);
-        requestSeekPreview(playBarActions.seekMs);
+        const int seekResult = engine_.seekMs((int64_t)playBarActions.seekMs);
+        AppLog::info("App", "seek（进度条）-> " + std::to_string((int)playBarActions.seekMs) +
+                                " ms rc=" + std::to_string(seekResult));
+        if (seekResult < 0) {
+            setStatus("这个位置暂时不能跳转", true);
+        } else {
+            requestSeekPreview(playBarActions.seekMs);
+        }
     }
     if (playBarActions.volumeWheelDelta != 0.0f) {
         // 滚轮微调：每格 1%

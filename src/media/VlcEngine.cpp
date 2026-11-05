@@ -136,7 +136,7 @@ struct VlcEngine::Api {
     int (*libvlc_media_player_get_state)(void* player);
     int64_t (*libvlc_media_player_get_time)(void* player);
     int64_t (*libvlc_media_player_get_length)(void* player);
-    void (*libvlc_media_player_set_time)(void* player, int64_t time);
+    int (*libvlc_media_player_set_time)(void* player, int64_t time);
     int (*libvlc_audio_set_volume)(void* player, int volume);
     int (*libvlc_audio_get_volume)(void* player);
     void* (*libvlc_audio_output_device_enum)(void* player);
@@ -472,8 +472,9 @@ int64_t VlcEngine::lengthMs() const {
     return api_->libvlc_media_player_get_length(player_);
 }
 
-void VlcEngine::seekMs(int64_t ms) {
-    if (api_ && player_) api_->libvlc_media_player_set_time(player_, ms);
+int VlcEngine::seekMs(int64_t ms) {
+    if (!api_ || !player_) return -1;
+    return api_->libvlc_media_player_set_time(player_, ms);
 }
 
 void VlcEngine::setVolume(int value) {
