@@ -254,6 +254,8 @@ int main(int argc, char** argv) {
     bool preventSleep = false;
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        // 后台（收进托盘）也要跑播放状态/自动切歌/异步事件，不能只在 draw() 里做
+        app.tick();
         // 播放时阻止熄屏/休眠（M4）
         const bool wantPreventSleep = app.playbackActive();
         if (wantPreventSleep != preventSleep) {

@@ -21,6 +21,9 @@ class App {
 public:
     void init(GLFWwindow* window);
     void draw();
+    // 与渲染无关的每帧逻辑：处理异步事件、同步播放状态、定时器、自动切歌。
+    // 窗口隐藏到托盘时主循环也会调用它，保证后台播放能自动播下一首。
+    void tick();
     void shutdown();
 
     // M4：托盘 / 全局媒体快捷键用
@@ -105,6 +108,7 @@ private:
     };
 
     void syncPlaybackState();
+    void checkTrackEnd();
     void selectPlaylist(long long playlistId);
     void playSongById(long long songId);
     void playFirstPlayable();
@@ -123,6 +127,9 @@ private:
     void pollAsync();
     void drawDialogs();
     void checkPlaybackStall();
+
+    // 自动切歌防重复：当前曲目已处理过结尾就不再触发
+    long long autoNextHandledSongId_ = -1;
     void applyQualitySelection(int qualityId);
 
     // M3：歌单管理 / 导入

@@ -133,6 +133,7 @@ struct VlcEngine::Api {
     void (*libvlc_media_player_set_pause)(void* player, int doPause);
     void (*libvlc_media_player_stop)(void* player);
     int (*libvlc_media_player_is_playing)(void* player);
+    int (*libvlc_media_player_get_state)(void* player);
     int64_t (*libvlc_media_player_get_time)(void* player);
     int64_t (*libvlc_media_player_get_length)(void* player);
     void (*libvlc_media_player_set_time)(void* player, int64_t time);
@@ -204,6 +205,7 @@ bool VlcEngine::init(std::string* error) {
     resolveSymbol(module, "libvlc_media_player_set_pause", api->libvlc_media_player_set_pause, ok, error);
     resolveSymbol(module, "libvlc_media_player_stop", api->libvlc_media_player_stop, ok, error);
     resolveSymbol(module, "libvlc_media_player_is_playing", api->libvlc_media_player_is_playing, ok, error);
+    resolveSymbol(module, "libvlc_media_player_get_state", api->libvlc_media_player_get_state, ok, error);
     resolveSymbol(module, "libvlc_media_player_get_time", api->libvlc_media_player_get_time, ok, error);
     resolveSymbol(module, "libvlc_media_player_get_length", api->libvlc_media_player_get_length, ok, error);
     resolveSymbol(module, "libvlc_media_player_set_time", api->libvlc_media_player_set_time, ok, error);
@@ -452,6 +454,12 @@ void VlcEngine::stop() {
 
 bool VlcEngine::isPlaying() const {
     return api_ && player_ && api_->libvlc_media_player_is_playing(player_) != 0;
+}
+
+bool VlcEngine::ended() const {
+    if (!api_ || !player_ || api_->libvlc_media_player_get_state == nullptr) return false;
+    // libvlc_state_t::libvlc_Ended == 6
+    return api_->libvlc_media_player_get_state(player_) == 6;
 }
 
 int64_t VlcEngine::positionMs() const {

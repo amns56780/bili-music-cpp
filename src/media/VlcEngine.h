@@ -53,6 +53,8 @@ public:
     void stop();
 
     bool isPlaying() const;
+    bool ended() const;        // libvlc 状态 == Ended（当前曲目自然播完）
+    bool userPaused() const { return pausedRequested_; }
     int64_t positionMs() const;
     int64_t lengthMs() const;
     void seekMs(int64_t ms);

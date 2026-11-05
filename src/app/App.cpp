@@ -455,6 +455,7 @@ void App::startLoginCheck() {
 
 void App::startOnlinePlayFor(long long songId, const std::string& bvid, long long cid,
                             const std::string& title, const std::string& artist) {
+    autoNextHandledSongId_ = -1;
     playingSongId_ = songId;
     playingTitle_ = title;
     playingArtist_ = artist;
@@ -582,6 +583,7 @@ void App::startPastePlay(const std::string& text) {
 void App::playSongById(long long songId) {
     const StoredSong* song = findSong(songId);
     if (song == nullptr) return;
+    autoNextHandledSongId_ = -1;
     playingSongId_ = song->id;
     playingTitle_ = song->title;
     playingArtist_ = song->artist;
@@ -678,6 +680,27 @@ void App::requestSeekPreview(double positionMs) {
     seekPreviewMs_ = positionMs;
     seekPreviewUntil_ = GetTickCount64() + 1500;
     positionMs_ = positionMs;
+}
+
+void App::tick() {
+    pollAsync();
+    syncPlaybackState();
+    checkSleepTimer();
+    checkTrackEnd();
+}
+
+void App::checkTrackEnd() {
+    if (!hasMedia_ || playingSongId_ < 0) return;
+    if (autoNextHandledSongId_ == playingSongId_) return;
+    const bool ended = engine_.ended();
+    // 兜底：有些格式 ended 状态不触发，位置停在（接近）总时长且不是用户暂停
+    const bool nearEnd = !engine_.userPaused() && !playing_ && durationMs_ > 1000.0 &&
+                         positionMs_ >= durationMs_ - 1000.0;
+    if (!ended && !nearEnd) return;
+    autoNextHandledSongId_ = playingSongId_;
+    AppLog::info("App", "播放结束，自动下一首：" + playingTitle_);
+    setStatus("播放结束，自动播放下一首");
+    stepSong(1);
 }
 
 void App::syncPlaybackState() {
@@ -2958,10 +2981,6 @@ void App::drawDialogs() {
 }
 
 void App::draw() {
-    pollAsync();
-    syncPlaybackState();
-    checkSleepTimer();
-
     ImGuiIO& io = ImGui::GetIO();
 
     // 沉浸模式快捷键（Java 版对齐）：空格 播放/暂停、[ ] 切歌、Esc 退出、F11 全屏切换
