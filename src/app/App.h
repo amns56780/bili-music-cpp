@@ -113,6 +113,18 @@ private:
     void playSongById(long long songId);
     void playFirstPlayable();
     void stepSong(int direction);
+    // 随机播放：洗牌袋（队列索引的排列），点播/切模式时当前曲排第一，
+    // 一轮播完把刚播完的排到最后再重洗 —— 对齐 Java 版 shuffleOrder 语义，避免 rand() 连续重复同一首
+    void rebuildShuffleOrder(long long firstSongId);
+    bool playShuffleStep(int direction);
+    // 用户手动点歌（双击曲目 / 队列点选 / 播放全部）：随机模式下把这首排到洗牌顺序第一位
+    void playSongFromUser(long long songId);
+    // 歌单页「随机播放」：切到随机模式，并从歌单里随机挑第一首（不是固定从第一首开始）
+    void shufflePlayPlaylist();
+    // 统一切换播放模式（会持久化 desktop.playmode，进入随机时按需建洗牌顺序）
+    void setPlayMode(int mode);
+    // 输出设备切换 / 卡死恢复：重载当前媒体并回到原位置（VLC 3 只在媒体启动时读输出设备）
+    bool reloadCurrentMediaAt(double positionMs, bool resumeIfPlaying);
     void setStatus(const std::string& text, bool isError = false);
     const StoredPlaylist* currentPlaylist() const;
     std::vector<const StoredSong*> currentSongs() const;
@@ -220,6 +232,12 @@ private:
     double pendingSeekMs_ = -1.0;
     uint64_t stallWatchStartTick_ = 0;
     int stallRetries_ = 0;
+    // 播放中假死看门狗（对齐 Java 版：2s 采样，位置连续 12s 不前进就重建并回到原位置）
+    uint64_t stallSampleTick_ = 0;
+    double stallLastPositionMs_ = 0.0;
+    int stallStuckTicks_ = 0;
+    int stallRecoverCount_ = 0;
+    std::vector<long long> shuffleOrder_;  // 随机播放的洗牌顺序（存 songId）
 
     // 登录/账号
     std::string accountName_;
@@ -297,6 +315,8 @@ private:
     bool sleepTimerActive_ = false;
     uint64_t sleepTimerEndTick_ = 0;
     int sleepTimerMinutes_ = 0;
+    // 定时关闭到点后「等当前曲播完再停」（Java 版默认语义），而不是立刻掐断
+    bool stopAfterCurrentTrack_ = false;
     bool queueDialogRequested_ = false;
     bool outputDeviceDialogRequested_ = false;
     std::vector<std::pair<std::string, std::string>> outputDevices_;  // id, 名称

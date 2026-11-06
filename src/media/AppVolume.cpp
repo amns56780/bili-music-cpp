@@ -166,11 +166,34 @@ bool AppVolume::ensureSession() {
     return false;
 }
 
+float AppVolume::uiToLevel(int percent) {
+    const int ui = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+    if (ui <= 0) return 0.0f;
+    if (ui >= 100) return 1.0f;
+    // 低音量段（1..10）压到 0.1%..1%，避免夜深时最小音量还是太响；
+    // 11..99 走 1.1 次幂，比线性略陡，和 Java 版听感一致。
+    if (ui <= 10) return 0.001f * (float)ui;
+    const float t = (float)(ui - 10) / 90.0f;
+    return 0.01f + 0.99f * std::pow(t, 1.1f);
+}
+
+int AppVolume::levelToUi(float level) {
+    if (level <= 0.0f) return 0;
+    if (level >= 1.0f) return 100;
+    if (level <= 0.01f) {
+        const int ui = (int)std::lround(level / 0.001f);
+        return ui < 1 ? 1 : (ui > 10 ? 10 : ui);
+    }
+    const float t = (level - 0.01f) / 0.99f;
+    const int ui = (int)std::lround(10.0f + 90.0f * std::pow(t, 1.0f / 1.1f));
+    return ui < 11 ? 11 : (ui > 99 ? 99 : ui);
+}
+
 bool AppVolume::setVolume(int percent, bool force) {
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
     if (!ensureSession()) return false;
     if (!force && lastVolume_ == clamped) return true;
-    const float level = (float)clamped / 100.0f;
+    const float level = uiToLevel(clamped);
     if (FAILED(sessionVolume_->SetMasterVolume(level, nullptr))) return false;
     if (lastVolume_ != clamped) {
         AppLog::info("AppVolume", "应用级音量 -> " + std::to_string(clamped) + "%");
@@ -183,7 +206,7 @@ int AppVolume::volume() const {
     if (sessionVolume_ == nullptr) return -1;
     float level = 0.0f;
     if (FAILED(sessionVolume_->GetMasterVolume(&level))) return -1;
-    return (int)std::lround(level * 100.0f);
+    return levelToUi(level);
 }
 
 float AppVolume::peak() const {

@@ -87,11 +87,18 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
 
     // 操作按钮（底对齐到封面底部）
     const float buttonY = coverBottom - 34.0f;
-    ImGui::SetCursorPos(ImVec2(infoX, buttonY));
+    // 按钮按实际宽度顺排，避免写死坐标后加按钮就挤在一起
+    float buttonX = infoX;
+    ImGui::SetCursorPos(ImVec2(buttonX, buttonY));
     if (PrimaryButton("play_all", "播放全部", Icons::PlayArrow)) actions->playAll = true;
-    ImGui::SetCursorPos(ImVec2(infoX + 122.0f, buttonY));
+    buttonX += ImGui::GetItemRectSize().x + 12.0f;
+    ImGui::SetCursorPos(ImVec2(buttonX, buttonY));
+    if (GhostButton("shuffle_play", "随机播放", Icons::Shuffle)) actions->shufflePlay = true;
+    buttonX += ImGui::GetItemRectSize().x + 8.0f;
+    ImGui::SetCursorPos(ImVec2(buttonX, buttonY));
     if (GhostButton("select_mode", "多选")) actions->toggleSelectMode = true;
-    ImGui::SetCursorPos(ImVec2(infoX + 196.0f, buttonY));
+    buttonX += ImGui::GetItemRectSize().x + 4.0f;
+    ImGui::SetCursorPos(ImVec2(buttonX, buttonY));
     if (IconButton("page_more", Icons::MoreHoriz, 34.0f, 20.0f, Colors::Text2, false, true,
                    "更多操作")) {
         ImGui::OpenPopup("page_menu");
@@ -143,15 +150,19 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     draw->AddText(GetFonts().small, 15.0f, abs(rowX + 48.0f + 24.0f, tableTop + 9.0f), Colors::Text3, "音乐标题");
     draw->AddText(GetFonts().small, 15.0f, abs(artistX, tableTop + 9.0f), Colors::Text3, "UP主");
     const float durationHeaderWidth = MeasureText(GetFonts().small, 15.0f, "时长");
+    // 表头与数值同样右对齐到 rowWidth - 30（子窗口 padding 为 0，行的 pos.x 就是 rowX）
     draw->AddText(GetFonts().small, 15.0f,
-                  abs(rowX + rowWidth - 30.0f - durationHeaderWidth + 12.0f, tableTop + 9.0f),
-                  Colors::Text3, "时长");
+                  abs(rowX + rowWidth - 30.0f - durationHeaderWidth, tableTop + 9.0f), Colors::Text3,
+                  "时长");
     DividerLine(rowX, rowX + rowWidth, tableTop + Dimens::TableHeaderHeight);
 
     const float rowsTop = tableTop + Dimens::TableHeaderHeight + 1.0f;
     ImGui::SetCursorPos(ImVec2(rowX, rowsTop));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("##song_rows", ImVec2(rowWidth, contentHeight - rowsTop - 8.0f), ImGuiChildFlags_None);
+    // 行内容必须画在这个子窗口自己的 draw list 上：用外层窗口的 draw list 画，滚出视区的行不会被
+    // 子窗口裁剪，会漏到表头 / 封面上（表现为「时长」列一串时间飘在表头上面）。
+    ImDrawList* rowDraw = ImGui::GetWindowDrawList();
     if (songs.empty()) {
         ImGui::SetCursorPos(ImVec2(20.0f, 30.0f));
         TextBodySm("这个歌单还没有曲目。");
@@ -165,38 +176,38 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         const ImVec2 pos = ImGui::GetItemRectMin();
         const bool isPlaying = song.id == playingSongId;
         if (isPlaying) {
-            draw->AddRectFilled(pos, ImVec2(pos.x + rowWidth, pos.y + Dimens::RowHeight),
-                                Colors::BrandSoft, Dimens::RadiusRow);
+            rowDraw->AddRectFilled(pos, ImVec2(pos.x + rowWidth, pos.y + Dimens::RowHeight),
+                                   Colors::BrandSoft, Dimens::RadiusRow);
         } else if (hovered) {
-            draw->AddRectFilled(pos, ImVec2(pos.x + rowWidth, pos.y + Dimens::RowHeight),
-                                Colors::Hover, Dimens::RadiusRow);
+            rowDraw->AddRectFilled(pos, ImVec2(pos.x + rowWidth, pos.y + Dimens::RowHeight),
+                                   Colors::Hover, Dimens::RadiusRow);
         }
         // 多选模式：勾选框；普通模式：序号 / 播放中图标
         if (selectMode) {
             const bool checked = selectedSongIds.count(song.id) != 0;
             const ImVec2 box(pos.x + 22.0f, pos.y + (Dimens::RowHeight - 18.0f) * 0.5f);
-            draw->AddRectFilled(box, ImVec2(box.x + 18.0f, box.y + 18.0f),
-                                checked ? Colors::Brand : Colors::TagBg, 4.0f);
-            draw->AddRect(ImVec2(box.x + 0.5f, box.y + 0.5f),
-                          ImVec2(box.x + 17.5f, box.y + 17.5f),
-                          checked ? Colors::Brand : Colors::Text3, 4.0f);
+            rowDraw->AddRectFilled(box, ImVec2(box.x + 18.0f, box.y + 18.0f),
+                                   checked ? Colors::Brand : Colors::TagBg, 4.0f);
+            rowDraw->AddRect(ImVec2(box.x + 0.5f, box.y + 0.5f),
+                             ImVec2(box.x + 17.5f, box.y + 17.5f),
+                             checked ? Colors::Brand : Colors::Text3, 4.0f);
             if (checked) {
                 const ImU32 white = Colors::White;
-                draw->AddLine(ImVec2(box.x + 4.0f, box.y + 9.0f), ImVec2(box.x + 8.0f, box.y + 13.0f),
-                              white, 2.0f);
-                draw->AddLine(ImVec2(box.x + 8.0f, box.y + 13.0f), ImVec2(box.x + 14.0f, box.y + 5.0f),
-                              white, 2.0f);
+                rowDraw->AddLine(ImVec2(box.x + 4.0f, box.y + 9.0f), ImVec2(box.x + 8.0f, box.y + 13.0f),
+                                 white, 2.0f);
+                rowDraw->AddLine(ImVec2(box.x + 8.0f, box.y + 13.0f), ImVec2(box.x + 14.0f, box.y + 5.0f),
+                                 white, 2.0f);
             }
         } else if (isPlaying) {
             const std::string note = Icons::Utf8(Icons::GraphicEq);
-            draw->AddText(GetFonts().small, 15.0f, ImVec2(pos.x + 26.0f, pos.y + 14.0f), Colors::Brand,
-                          note.c_str());
+            rowDraw->AddText(GetFonts().small, 15.0f, ImVec2(pos.x + 26.0f, pos.y + 14.0f),
+                             Colors::Brand, note.c_str());
         } else {
             char index[16];
             std::snprintf(index, sizeof(index), "%d", (int)(i + 1));
             const float indexWidth = MeasureText(GetFonts().small, 15.0f, index);
-            draw->AddText(GetFonts().small, 15.0f, ImVec2(pos.x + 48.0f - indexWidth, pos.y + 15.0f),
-                          Colors::Text3, index);
+            rowDraw->AddText(GetFonts().small, 15.0f, ImVec2(pos.x + 48.0f - indexWidth, pos.y + 15.0f),
+                             Colors::Text3, index);
         }
         // 标题
         TextEllipsis(song.title, artistX - (pos.x + 48.0f + 24.0f) - 16.0f, GetFonts().body,
@@ -206,9 +217,9 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         // 时长
         const std::string duration = formatDuration(song.durationMs);
         const float durationWidth = MeasureText(GetFonts().small, 15.0f, duration);
-        draw->AddText(GetFonts().small, 15.0f,
-                      ImVec2(pos.x + rowWidth - 30.0f - durationWidth, pos.y + 15.0f), Colors::Text3,
-                      duration.c_str());
+        rowDraw->AddText(GetFonts().small, 15.0f,
+                         ImVec2(pos.x + rowWidth - 30.0f - durationWidth, pos.y + 15.0f), Colors::Text3,
+                         duration.c_str());
         if (selectMode) {
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
                 actions->toggleSong = true;

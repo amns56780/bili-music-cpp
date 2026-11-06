@@ -400,10 +400,11 @@ bool PrimaryButton(const char* id, const std::string& label, uint32_t icon, floa
     draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
                         hovered ? Colors::BrandHover : Colors::Brand, height / 2);
     float x = pos.x + (width - (labelWidth + iconWidth)) / 2;
-    // 文字/图标墨迹整体比行框低约 1px，统一上移 1px 让上下留白一致
+    // 文字墨迹比行框低约 1px，统一上移 1px；图标（尤其 ▶ 这种实心三角）视觉重心偏高，
+    // 再单独下移 2px 才和文字看起来同高。
     if (!glyph.empty()) {
         drawTextAt(GetFonts().body, 17.0f,
-                   ImVec2(x, pos.y + iconTextTopForCenter(height, 17.0f) - 1.0f), Colors::White,
+                   ImVec2(x, pos.y + iconTextTopForCenter(height, 17.0f) + 1.0f), Colors::White,
                    glyph);
         x += iconWidth;
     }

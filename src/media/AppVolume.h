@@ -27,6 +27,12 @@ public:
 
     // percent: 0..100；force=true 时即使数值没变也强制下发（防止 VLC 自己把会话音量改回去）
     bool setVolume(int percent, bool force = false);
+
+    // 音量曲线（与 Java 版 PlaybackController.uiToSessionVolume 完全一致）：
+    //   0 -> 0；1..10 -> 0.001*u；11..99 -> 0.01 + 0.99*((u-10)/90)^1.1；100 -> 1
+    // 直接用 u/100 会让低音量段比 Java 版响 10 倍（1% 是 0.01 而不是 0.001）。
+    static float uiToLevel(int percent);
+    static int levelToUi(float level);
     int volume() const;  // 读回当前会话音量（0..100）；不可用时返回 -1
     float peak() const;  // 当前音频会话峰值（0..1），用于自检「断断续续」
 

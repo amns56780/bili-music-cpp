@@ -12,6 +12,7 @@ namespace Ui {
 // M1.5 阶段只实现视觉/交互骨架：播放全部对本地曲目生效，重命名/删除等菜单项等 M3。
 struct PlaylistPageActions {
     bool playAll = false;
+    bool shufflePlay = false;  // 随机播放：模式切随机 + 首曲也从歌单里随机挑
     bool selectMode = false;
     bool openMenu = false;
     bool requestRename = false;

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <random>
 #include <set>
 #include <thread>
 
@@ -320,6 +321,16 @@ void App::init(GLFWwindow* window) {
     Ui::InitFonts();
     bili_.init();
     qualityId_ = qualityIdForKey(bili_.getSetting("audio_quality"));
+    // 播放模式（0 顺序 / 1 列表循环 / 2 单曲循环 / 3 随机）：记住上次的选择
+    {
+        const std::string modeSetting = bili_.getSetting("desktop.playmode");
+        if (!modeSetting.empty()) {
+            try {
+                mode_ = std::max(0, std::min(3, std::stoi(modeSetting)));
+            } catch (const std::exception&) {
+            }
+        }
+    }
 
     std::string engineError;
     if (!engine_.init(&engineError)) {
@@ -465,6 +476,11 @@ void App::startOnlinePlayFor(long long songId, const std::string& bvid, long lon
     curCid_ = cid;
     backupIndex_ = 0;
     stallRetries_ = 0;
+    // 换曲重置看门狗（否则上一首的计数会带到新曲上，误判假死）
+    stallSampleTick_ = 0;
+    stallStuckTicks_ = 0;
+    stallLastPositionMs_ = 0.0;
+    stallRecoverCount_ = 0;
     const int qualityIdSnapshot = qualityId_;
 
     // 整首缓存命中 → 直接本地播放（seek 秒响应、不吃网络）
@@ -584,6 +600,10 @@ void App::playSongById(long long songId) {
     const StoredSong* song = findSong(songId);
     if (song == nullptr) return;
     autoNextHandledSongId_ = -1;
+    stallSampleTick_ = 0;
+    stallStuckTicks_ = 0;
+    stallLastPositionMs_ = 0.0;
+    stallRecoverCount_ = 0;
     playingSongId_ = song->id;
     playingTitle_ = song->title;
     playingArtist_ = song->artist;
@@ -619,6 +639,36 @@ void App::playFirstPlayable() {
     setStatus("这个歌单没有可播放的曲目（没有本地文件，也没有 bvid）", true);
 }
 
+void App::setPlayMode(int mode) {
+    const int clamped = mode < 0 ? 0 : (mode > 3 ? 3 : mode);
+    mode_ = clamped;
+    if (mode_ == 3 && shuffleOrder_.empty()) rebuildShuffleOrder(playingSongId_);
+    bili_.setSetting("desktop.playmode", std::to_string(mode_));
+}
+
+void App::shufflePlayPlaylist() {
+    const std::vector<const StoredSong*> songs = currentSongs();
+    std::vector<long long> playable;
+    playable.reserve(songs.size());
+    for (const StoredSong* song : songs) {
+        if (!song->localPath.empty() || !song->bvid.empty()) playable.push_back(song->id);
+    }
+    if (playable.empty()) {
+        setStatus("这个歌单没有可播放的曲目（没有本地文件，也没有 bvid）", true);
+        return;
+    }
+    // 首曲从整个歌单里随机挑 —— 不是固定从第一首开始（对齐手机端修好的行为）
+    static std::mt19937 rng((unsigned)std::random_device{}());
+    std::uniform_int_distribution<size_t> pick(0, playable.size() - 1);
+    const long long firstId = playable[pick(rng)];
+    setPlayMode(3);
+    rebuildShuffleOrder(firstId);  // 随机出的这首排第一，其余再洗牌
+    const StoredSong* first = findSong(firstId);
+    AppLog::info("App", "随机播放：首曲随机 -> " + (first != nullptr ? first->title : std::string("?")));
+    setStatus("随机播放（共 " + std::to_string(playable.size()) + " 首）");
+    playSongById(firstId);
+}
+
 void App::stepSong(int direction) {
     const std::vector<const StoredSong*> songs = currentSongs();
     if (songs.empty()) {
@@ -633,11 +683,29 @@ void App::stepSong(int direction) {
         }
     }
     const int count = (int)songs.size();
+
+    // 随机：走洗牌袋，一轮内不重复；播到一轮末尾自动重洗（对齐 Java 版 shuffleOrder）
+    if (mode_ == 3 && playShuffleStep(direction)) return;
+
+    // 单曲循环：下一首 = 自己（手动上一首仍然按列表走）
+    const bool repeatOne = (mode_ == 2 && direction == 1);
+
+    // 顺序播放：到末尾就停，不回绕（Java 版 SEQUENTIAL 语义）
+    if (!repeatOne && mode_ == 0 && direction > 0 && currentIndex == count - 1) {
+        engine_.stop();
+        autoNextHandledSongId_ = playingSongId_;
+        hasMedia_ = false;
+        playing_ = false;
+        positionMs_ = 0.0;
+        durationMs_ = 0.0;
+        setStatus("歌单播放完了");
+        AppLog::info("App", "顺序播放到末尾，停止");
+        return;
+    }
+
     for (int step = 1; step <= count; ++step) {
         int index = 0;
-        if (mode_ == 3) {
-            index = (int)(std::rand() % count);
-        } else if (mode_ == 2 && direction == 1) {
+        if (repeatOne) {
             index = currentIndex >= 0 ? currentIndex : 0;
         } else if (currentIndex >= 0) {
             index = (currentIndex + direction * step) % count;
@@ -651,9 +719,86 @@ void App::stepSong(int direction) {
             playSongById(candidate->id);
             return;
         }
-        if (mode_ == 2) break;
+        if (repeatOne) break;
     }
     setStatus("附近没有可播放的曲目", true);
+}
+
+void App::rebuildShuffleOrder(long long firstSongId) {
+    const std::vector<const StoredSong*> songs = currentSongs();
+    std::vector<long long> rest;
+    rest.reserve(songs.size());
+    bool hasFirst = false;
+    for (const StoredSong* song : songs) {
+        if (firstSongId >= 0 && song->id == firstSongId) {
+            hasFirst = true;
+            continue;
+        }
+        rest.push_back(song->id);
+    }
+    static std::mt19937 rng((unsigned)std::random_device{}());
+    std::shuffle(rest.begin(), rest.end(), rng);
+    shuffleOrder_.clear();
+    if (hasFirst) shuffleOrder_.push_back(firstSongId);
+    shuffleOrder_.insert(shuffleOrder_.end(), rest.begin(), rest.end());
+    AppLog::info("App", "随机顺序重建：" + std::to_string(shuffleOrder_.size()) + " 首" +
+                            (hasFirst ? "（指定首曲）" : ""));
+}
+
+bool App::playShuffleStep(int direction) {
+    const std::vector<const StoredSong*> songs = currentSongs();
+    if (songs.size() < 2) return false;
+    bool orderValid = shuffleOrder_.size() == songs.size();
+    if (orderValid) {
+        for (const StoredSong* song : songs) {
+            if (std::find(shuffleOrder_.begin(), shuffleOrder_.end(), song->id) ==
+                shuffleOrder_.end()) {
+                orderValid = false;
+                break;
+            }
+        }
+    }
+    if (!orderValid) rebuildShuffleOrder(playingSongId_);
+
+    int pos = -1;
+    for (size_t i = 0; i < shuffleOrder_.size(); ++i) {
+        if (shuffleOrder_[i] == playingSongId_) {
+            pos = (int)i;
+            break;
+        }
+    }
+    const int size = (int)shuffleOrder_.size();
+    if (size == 0) return false;
+
+    for (int attempt = 0; attempt < size; ++attempt) {
+        int next = pos + direction;
+        if (next >= size && direction > 0) {
+            // 一轮播完：把刚播完的这首排到最后再重洗，保证新一轮不会立刻重复上一首
+            const long long finished = playingSongId_;
+            rebuildShuffleOrder(-1);
+            shuffleOrder_.erase(
+                std::remove(shuffleOrder_.begin(), shuffleOrder_.end(), finished),
+                shuffleOrder_.end());
+            if (finished >= 0) shuffleOrder_.push_back(finished);
+            AppLog::info("App", "随机一轮播完，重新洗牌");
+            next = 0;
+        }
+        if (next < 0) next = size - 1;
+        if (next >= size) continue;
+        pos = next;
+        const long long id = shuffleOrder_[(size_t)pos];
+        const StoredSong* song = findSong(id);
+        if (song != nullptr && (!song->localPath.empty() || !song->bvid.empty())) {
+            playSongById(id);
+            return true;
+        }
+    }
+    return false;
+}
+
+void App::playSongFromUser(long long songId) {
+    if (mode_ == 3) rebuildShuffleOrder(songId);
+    playSongById(songId);
 }
 
 void App::toggleSidebar() {
@@ -705,6 +850,16 @@ void App::checkTrackEnd() {
     const bool nearEnd = !engine_.userPaused() && !playing_ && durationMs_ > 1000.0 &&
                          positionMs_ >= durationMs_ - 1000.0;
     if (!ended && !nearEnd) return;
+    // 定时关闭到点：本曲播完再停（Java 版默认语义），优先级高于切下一首
+    if (stopAfterCurrentTrack_) {
+        stopAfterCurrentTrack_ = false;
+        autoNextHandledSongId_ = playingSongId_;
+        engine_.pause();
+        playing_ = false;
+        setStatus("定时到点，本曲播完已停止播放");
+        AppLog::info("App", "定时关闭：本曲播完，已停止播放");
+        return;
+    }
     autoNextHandledSongId_ = playingSongId_;
     AppLog::info("App", "播放结束，自动下一首：" + playingTitle_);
     setStatus("播放结束，自动播放下一首");
@@ -805,6 +960,7 @@ void App::cancelSleepTimer() {
     sleepTimerActive_ = false;
     sleepTimerEndTick_ = 0;
     sleepTimerMinutes_ = 0;
+    stopAfterCurrentTrack_ = false;
     setStatus("已取消定时关闭");
 }
 
@@ -814,6 +970,13 @@ void App::checkSleepTimer() {
     sleepTimerActive_ = false;
     sleepTimerEndTick_ = 0;
     sleepTimerMinutes_ = 0;
+    if (engine_.isPlaying() && hasMedia_) {
+        // 对齐 Java 版：到点先标记「本曲播完再停」，不打断正在听的这首
+        stopAfterCurrentTrack_ = true;
+        setStatus("定时到点：本曲播完将停止播放");
+        AppLog::info("App", "定时关闭到点，等待本曲播完");
+        return;
+    }
     if (engine_.isPlaying()) engine_.pause();
     stallWatchStartTick_ = 0;
     setStatus("定时关闭：已暂停播放");
@@ -835,12 +998,56 @@ void App::applyOutputDevice(const std::string& id) {
     engine_.setAudioOutputDevice(id);
     engine_.applyOutputDevice();
     bili_.setSetting("audio.outputDevice", id);
+    // VLC 3 只在媒体启动时读输出设备，播放中设置不会生效 —— 必须重载当前媒体并回到原位置
+    if (hasMedia_ && playingSongId_ >= 0) {
+        const double resumeAt = positionMs_;
+        if (reloadCurrentMediaAt(resumeAt, true)) {
+            AppLog::info("App", "切换输出设备后重载媒体，回到 " + std::to_string((int)resumeAt) + "ms");
+        }
+    }
     std::string name = "默认设备";
     for (const auto& device : outputDevices_) {
         if (device.first == id) name = device.second;
     }
     setStatus("输出设备：" + name);
     AppLog::info("App", "切换输出设备：" + name + " (" + id + ")");
+}
+
+bool App::reloadCurrentMediaAt(double positionMs, bool resumeIfPlaying) {
+    if (playingSongId_ < 0) return false;
+    const bool wasPlaying = engine_.isPlaying();
+    const StoredSong* song = findSong(playingSongId_);
+    std::string error;
+    bool reloaded = false;
+    if (song != nullptr && !song->localPath.empty()) {
+        reloaded = engine_.playPath(utf8ToWide(song->localPath), &error);
+    }
+    if (!reloaded) {
+        const std::wstring cachePath = playbackCacheFile(curBvid_, qualityId_);
+        if (cacheFileUsable(cachePath)) reloaded = engine_.playPath(cachePath, &error);
+    }
+    if (!reloaded && !curStreamUrl_.empty()) {
+        reloaded = engine_.playUrl(curStreamUrl_, kReferer, kUserAgent, &error);
+    }
+    if (!reloaded && currentIsOnline_ && !curBvid_.empty()) {
+        pendingSeekMs_ = positionMs;
+        engine_.setVolume(volume_);
+        startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
+        return true;
+    }
+    if (!reloaded) {
+        AppLog::warn("App", "重载媒体失败：" + error);
+        return false;
+    }
+    engine_.setVolume(volume_);
+    if (positionMs > 1500.0) engine_.seekMs((int64_t)positionMs);
+    if (resumeIfPlaying && !wasPlaying) engine_.pause();
+    seekPreviewMs_ = -1.0;
+    stallWatchStartTick_ = 0;
+    stallSampleTick_ = 0;
+    stallStuckTicks_ = 0;
+    stallLastPositionMs_ = positionMs;
+    return true;
 }
 
 namespace {
@@ -1162,7 +1369,7 @@ void App::drawImmersive() {
         toggleImmersiveFullscreen();
     }
     if (roundButton("imm_mode", modeIcon, modeX, btnY, btnSize, px(20), false, buttonBackground)) {
-        mode_ = (mode_ + 1) % 4;
+        setPlayMode((mode_ + 1) % 4);
         immersiveModeTip_ = formatModeName(mode_);
         immersiveModeTipUntil_ = GetTickCount64() + 2000;
         setStatus("播放模式：" + immersiveModeTip_);
@@ -1466,6 +1673,46 @@ void App::playPrevious() {
 }
 
 void App::checkPlaybackStall() {
+    // ① 播放中假死看门狗（本地 / 缓存 / 在线都适用）：
+    //    Java 版是 2s 采样、位置连续 12s 不前进就重建媒体并回到原位置；C++ 原来只有「起播 6s」那一段。
+    const bool sampling = hasMedia_ && playing_ && !engine_.userPaused() && durationMs_ > 3000.0;
+    if (sampling) {
+        const uint64_t now = GetTickCount64();
+        if (stallSampleTick_ == 0) {
+            stallSampleTick_ = now;
+            stallLastPositionMs_ = positionMs_;
+        } else if (now - stallSampleTick_ >= 2000) {
+            const double delta = std::abs(positionMs_ - stallLastPositionMs_);
+            stallSampleTick_ = now;
+            stallLastPositionMs_ = positionMs_;
+            stallStuckTicks_ = delta < 50.0 ? stallStuckTicks_ + 1 : 0;
+            if (stallStuckTicks_ >= 6) {
+                stallStuckTicks_ = 0;
+                const double resumeAt = positionMs_;
+                if (stallRecoverCount_ >= 3) {
+                    stallRecoverCount_ = 0;
+                    setStatus("播放卡住了，试试下一首或重新播放", true);
+                } else {
+                    ++stallRecoverCount_;
+                    AppLog::warn("App", "播放假死（位置 " + std::to_string((int)resumeAt) +
+                                            "ms 连续 12 秒未前进），第 " +
+                                            std::to_string(stallRecoverCount_) + " 次重建");
+                    setStatus("播放卡住了，正在重新连接…");
+                    streamCache_.erase(playingSongId_);
+                    if (!reloadCurrentMediaAt(resumeAt, true)) {
+                        setStatus("播放中断，试试下一首或重新播放", true);
+                    }
+                }
+                return;
+            }
+        }
+    } else {
+        stallSampleTick_ = 0;
+        stallLastPositionMs_ = positionMs_;
+        stallStuckTicks_ = 0;
+    }
+
+    // ② 起播看门狗（只针对在线流：起播 6s 还没出声就换源）
     if (!currentIsOnline_) return;
     // 暂停/缓冲期间位置本来就不前进，不能当成「卡住」去重取流
     if (!playing_) return;
@@ -2804,7 +3051,7 @@ void App::drawM3Dialogs() {
             queueDialogRequested_ = false;
             ImGui::CloseCurrentPopup();
         }
-        if (pendingQueueSong >= 0) playSongById(pendingQueueSong);
+        if (pendingQueueSong >= 0) playSongFromUser(pendingQueueSong);
         ImGui::EndPopup();
     }
 
@@ -3204,7 +3451,8 @@ void App::draw() {
     if (sidebarActions.toggleImportMenu) importSourceDialogRequested_ = true;
 
     if (pageActions.playAll) playFirstPlayable();
-    if (pageActions.playSongId >= 0) playSongById(pageActions.playSongId);
+    if (pageActions.shufflePlay) shufflePlayPlaylist();
+    if (pageActions.playSongId >= 0) playSongFromUser(pageActions.playSongId);
     if (pageActions.toggleSelectMode) {
         selectMode_ = !selectMode_;
         if (!selectMode_) selectedSongIds_.clear();
@@ -3259,7 +3507,7 @@ void App::draw() {
     if (playBarActions.previous) playPrevious();
     if (playBarActions.next) playNext();
     if (playBarActions.cycleMode) {
-        mode_ = (mode_ + 1) % 4;
+        setPlayMode((mode_ + 1) % 4);
         setStatus("播放模式：" + formatModeName(mode_));
     }
     if (playBarActions.seekFinished) {
