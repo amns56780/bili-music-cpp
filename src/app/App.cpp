@@ -341,6 +341,31 @@ void App::init(GLFWwindow* window) {
     selectedOutputDeviceId_ = bili_.getSetting("audio.outputDevice");
     if (!selectedOutputDeviceId_.empty()) engine_.setAudioOutputDevice(selectedOutputDeviceId_);
 
+    // 旧版本 httpGet 有 8 MiB 上限，超过这个体积的整首缓存只存了前一半（播一半就切歌）。
+    // 升级后一次性清掉这些可疑缓存，让它们按新上限重新缓存。
+    {
+        const std::wstring cacheDir = playbackCacheDir();
+        const std::wstring marker = cacheDir + L"\\.cache-v2-complete";
+        if (GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES &&
+            GetFileAttributesW(cacheDir.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            int removed = 0;
+            WIN32_FIND_DATAW data{};
+            HANDLE find = FindFirstFileW((cacheDir + L"\\*_*.m4s").c_str(), &data);
+            if (find != INVALID_HANDLE_VALUE) {
+                do {
+                    if (DeleteFileW((cacheDir + L"\\" + data.cFileName).c_str())) ++removed;
+                } while (FindNextFileW(find, &data));
+                FindClose(find);
+            }
+            HANDLE out = CreateFileW(marker.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                     FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (out != INVALID_HANDLE_VALUE) CloseHandle(out);
+            if (removed > 0) {
+                AppLog::warn("App", "清理旧版截断缓存 " + std::to_string(removed) + " 个");
+            }
+        }
+    }
+
     // 播放缓存范围（秒）：没有配置时默认 5 秒（seek 更快；旧版本是写死 20 秒）
     {
         const std::string cacheSetting = bili_.getSetting("audio.network_cache");
@@ -504,22 +529,34 @@ void App::startOnlinePlayFor(long long songId, const std::string& bvid, long lon
     if (cacheFileUsable(fullCache)) {
         std::string error;
         if (engine_.playPath(fullCache, &error)) {
-            engine_.setVolume(volume_);
-            currentIsOnline_ = false;
-            pendingSongId_ = -1;
-            curStreamUrl_.clear();
-            curBackups_.clear();
-            lastStreamQualityId_ = qualityIdSnapshot;
-            stallWatchStartTick_ = 0;
-            backupIndex_ = 0;
-            if (pendingSeekMs_ >= 0.0) {
-                engine_.seekMs((int64_t)pendingSeekMs_);
-                pendingSeekMs_ = -1.0;
+            // 老版本 httpGet 有 8 MiB 上限：超过这个体积的歌缓存的只是前一半，
+            // 播到那里就 Ended → 自动切歌。这里按「引擎时长 vs 曲目记录时长」识别并丢弃。
+            const StoredSong* cachedSong = findSong(songId);
+            const long long expectedMs = cachedSong != nullptr ? cachedSong->durationMs : 0;
+            const long long gotMs = engine_.lengthMs();
+            if (expectedMs > 3000 && gotMs > 0 && gotMs * 10 < expectedMs * 9) {
+                engine_.stop();
+                DeleteFileW(fullCache.c_str());
+                AppLog::warn("App", "缓存不完整（" + std::to_string(gotMs) + "/" +
+                                        std::to_string(expectedMs) + "ms），已删除并改走流播放");
+            } else {
+                engine_.setVolume(volume_);
+                currentIsOnline_ = false;
+                pendingSongId_ = -1;
+                curStreamUrl_.clear();
+                curBackups_.clear();
+                lastStreamQualityId_ = qualityIdSnapshot;
+                stallWatchStartTick_ = 0;
+                backupIndex_ = 0;
+                if (pendingSeekMs_ >= 0.0) {
+                    engine_.seekMs((int64_t)pendingSeekMs_);
+                    pendingSeekMs_ = -1.0;
+                }
+                setStatus("正在播放（整首缓存）：" + title);
+                AppLog::info("App", "整首缓存命中，本地播放 bvid=" + bvid);
+                prefetchNextSongCache();
+                return;
             }
-            setStatus("正在播放（整首缓存）：" + title);
-            AppLog::info("App", "整首缓存命中，本地播放 bvid=" + bvid);
-            prefetchNextSongCache();
-            return;
         }
     }
     // 后台把当前歌曲整首缓存下来（流播放同时进行，下载完自动切本地）
@@ -994,8 +1031,31 @@ void App::checkTrackEnd() {
         AppLog::info("App", "定时关闭：本曲播完，已停止播放");
         return;
     }
+    // 提前结束：ended 了但位置离总时长还差一大截 → 多半是缓存文件被截断/损坏。
+    // 删掉这份缓存，改走在线流并从当前位置续播（同一首只重试一次，避免死循环）。
+    const bool premature = ended && durationMs_ > 5000.0 && positionMs_ > 0.0 &&
+                           positionMs_ < durationMs_ - 3000.0;
+    if (premature && earlyEndRetrySongId_ != playingSongId_) {
+        const StoredSong* song = findSong(playingSongId_);
+        if (song != nullptr && !song->bvid.empty()) {
+            earlyEndRetrySongId_ = playingSongId_;
+            const std::wstring cachePath = playbackCacheFile(song->bvid, qualityId_);
+            DeleteFileW(cachePath.c_str());
+            AppLog::warn("App", "播放提前结束（pos=" + std::to_string((long long)positionMs_) +
+                                    "/" + std::to_string((long long)durationMs_) +
+                                    "ms），删除不完整缓存并改走在线流");
+            pendingSeekMs_ = positionMs_;
+            autoNextHandledSongId_ = -1;
+            setStatus("缓存文件不完整，已删除并改走在线流");
+            startOnlinePlayFor(playingSongId_, song->bvid, song->cid, song->title, song->artist);
+            return;
+        }
+    }
     autoNextHandledSongId_ = playingSongId_;
-    AppLog::info("App", "播放结束，自动下一首：" + playingTitle_);
+    AppLog::info("App", "播放结束，自动下一首：" + playingTitle_ + "（pos=" +
+                            std::to_string((long long)positionMs_) + "/" +
+                            std::to_string((long long)durationMs_) + "ms ended=" +
+                            (ended ? "1" : "0") + "）");
     setStatus("播放结束，自动播放下一首");
     stepSong(1);
 }
@@ -2498,7 +2558,9 @@ void App::startCacheDownload(long long songId, const std::string& bvid, long lon
         std::string error;
         const std::vector<std::pair<std::string, std::string>> headers = {
             {"User-Agent", kUserAgent}, {"Referer", kReferer}};
-        if (!net::httpGet(stream.url, headers, &response, &error) ||
+        // 音频动辄 20–60 MB（Hi-Res），必须放宽 httpGet 的 8 MiB 默认上限，
+        // 否则缓存会被截断成半首歌 → 播到一半就 Ended → 自动下一首
+        if (!net::httpGet(stream.url, headers, &response, &error, 256u * 1024u * 1024u) ||
             response.body.size() < 100 * 1024) {
             event.ok = false;
             event.message = error.empty() ? "缓存内容过小" : error;
@@ -2561,6 +2623,19 @@ void App::handleCacheReady(const AsyncEvent& event) {
         const double position = positionMs_;
         std::string error;
         if (engine_.playPath(path, &error)) {
+            // 先确认这份缓存是完整的：不完整就丢掉，继续流播放（否则播到截断处会 Ended → 自动切歌）
+            const StoredSong* cachedSong = findSong(event.songId);
+            const long long expectedMs = cachedSong != nullptr ? cachedSong->durationMs : 0;
+            const long long gotMs = engine_.lengthMs();
+            if (expectedMs > 3000 && gotMs > 0 && gotMs * 10 < expectedMs * 9) {
+                engine_.stop();
+                DeleteFileW(path.c_str());
+                AppLog::warn("App", "整首缓存不完整（" + std::to_string(gotMs) + "/" +
+                                        std::to_string(expectedMs) + "ms），丢弃并继续流播放");
+                pendingSeekMs_ = position;
+                startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
+                return;
+            }
             engine_.setVolume(volume_);
             if (position > 0.5 && durationMs_ > 0.0) engine_.seekMs((int64_t)position);
             if (!wasPlaying) engine_.pause();
@@ -2687,7 +2762,8 @@ void App::beginDownload(long long downloadSongId) {
         std::string error;
         const std::vector<std::pair<std::string, std::string>> headers = {
             {"User-Agent", kUserAgent}, {"Referer", kReferer}};
-        if (!net::httpGet(url, headers, &response, &error) || response.body.empty()) {
+        if (!net::httpGet(url, headers, &response, &error, 256u * 1024u * 1024u) ||
+            response.body.empty()) {
             event.ok = false;
             event.message = error.empty() ? "下载内容为空" : error;
             postAsync(std::move(event));

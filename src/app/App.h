@@ -368,6 +368,8 @@ private:
     bool uninstallDialogRequested_ = false;
     bool uninstallKeepData_ = true;
     bool quitRequested_ = false;
+    // 提前结束（缓存不完整）只重试一次，避免死循环
+    long long earlyEndRetrySongId_ = -1;
     // 自动整首缓存（含预取下一首），写入 audio.full_cache，默认开启
     bool fullCacheEnabled_ = true;
     // 侧栏底部入口（本地音乐/输出设备/播放缓存/导入歌单）折叠状态

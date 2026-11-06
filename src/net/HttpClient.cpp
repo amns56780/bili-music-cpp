@@ -89,7 +89,7 @@ std::string urlEncode(const std::string& value) {
 
 bool httpGet(const std::string& url,
              const std::vector<std::pair<std::string, std::string>>& headers,
-             HttpResponse* response, std::string* error) {
+             HttpResponse* response, std::string* error, size_t maxBytes) {
     if (response == nullptr) return false;
     response->status = 0;
     response->body.clear();
@@ -192,7 +192,7 @@ bool httpGet(const std::string& url,
         if (read == 0) break;
         chunk.resize(read);
         response->body += chunk;
-        if (response->body.size() > 8u * 1024u * 1024u) break;
+        if (maxBytes > 0 && response->body.size() >= maxBytes) break;
     }
     return true;
 }
