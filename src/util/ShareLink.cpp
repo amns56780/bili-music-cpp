@@ -69,9 +69,11 @@ bool Base64UrlDecode(const std::string& text, std::vector<unsigned char>* out) {
     return true;
 }
 
-bool DeflateRaw(const std::string& input, std::vector<unsigned char>* out) {
+// 注意：Java 的 Deflater(int level) 走的是 zlib 包装（RFC1950，带 78 9c/78 da 头 + adler32 尾），
+// 不是 raw deflate。这里必须用 +15 才能被 Flutter/Android 的 Inflater() 与 Java 桌面端解开。
+bool DeflateZlib(const std::string& input, std::vector<unsigned char>* out) {
     mz_stream stream{};
-    if (mz_deflateInit2(&stream, MZ_BEST_COMPRESSION, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 9,
+    if (mz_deflateInit2(&stream, MZ_BEST_COMPRESSION, MZ_DEFLATED, MZ_DEFAULT_WINDOW_BITS, 9,
                         MZ_DEFAULT_STRATEGY) != MZ_OK) {
         return false;
     }
@@ -97,9 +99,10 @@ bool DeflateRaw(const std::string& input, std::vector<unsigned char>* out) {
     return true;
 }
 
-bool InflateRaw(const std::vector<unsigned char>& input, std::string* out) {
+// 优先按 zlib 解（Java / Android 生成的链接），失败再按 raw 兜底（早期 C++ 自己生成的链接）。
+bool InflateWithBits(const std::vector<unsigned char>& input, int windowBits, std::string* out) {
     mz_stream stream{};
-    if (mz_inflateInit2(&stream, -MZ_DEFAULT_WINDOW_BITS) != MZ_OK) return false;
+    if (mz_inflateInit2(&stream, windowBits) != MZ_OK) return false;
     out->clear();
     std::vector<unsigned char> chunk(8192);
     stream.next_in = input.data();
@@ -119,6 +122,12 @@ bool InflateRaw(const std::vector<unsigned char>& input, std::string* out) {
     }
     mz_inflateEnd(&stream);
     return !out->empty();
+}
+
+bool InflateAny(const std::vector<unsigned char>& input, std::string* out) {
+    if (InflateWithBits(input, MZ_DEFAULT_WINDOW_BITS, out)) return true;
+    out->clear();
+    return InflateWithBits(input, -MZ_DEFAULT_WINDOW_BITS, out);
 }
 
 std::string Trim(const std::string& text) {
@@ -152,7 +161,7 @@ std::string EncodeShareLink(const std::string& title, const std::vector<std::str
     const std::string json = payload.dump();
 
     std::vector<unsigned char> compressed;
-    if (!DeflateRaw(json, &compressed)) return {};
+    if (!DeflateZlib(json, &compressed)) return {};
     return std::string(kShareLinkPrefix) + Base64UrlEncode(compressed);
 }
 
@@ -165,7 +174,7 @@ bool DecodeShareLink(const std::string& text, SharedPlaylist* out) {
     std::vector<unsigned char> compressed;
     if (!Base64UrlDecode(body, &compressed) || compressed.empty()) return false;
     std::string json;
-    if (!InflateRaw(compressed, &json)) return false;
+    if (!InflateAny(compressed, &json)) return false;
 
     nlohmann::json parsed = nlohmann::json::parse(json, nullptr, false);
     if (parsed.is_discarded() || !parsed.is_object()) return false;
