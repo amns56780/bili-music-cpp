@@ -15,6 +15,7 @@ struct SidebarActions {
     bool openLocalMusic = false;
     bool openOutputDevice = false;
     bool openCacheSettings = false;
+    bool openSettings = false;
     bool toggleImportMenu = false;
     bool pasteLink = false;
     bool login = false;

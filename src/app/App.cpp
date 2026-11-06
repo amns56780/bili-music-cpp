@@ -27,6 +27,7 @@
 #include <GLFW/glfw3native.h>
 
 #include <commdlg.h>
+#include <shellapi.h>
 #include <shlobj.h>
 
 #include "media/AudioSpectrum.h"
@@ -1011,6 +1012,59 @@ void App::applyOutputDevice(const std::string& id) {
     }
     setStatus("输出设备：" + name);
     AppLog::info("App", "切换输出设备：" + name + " (" + id + ")");
+}
+
+void App::openDataFolder() {
+    const std::wstring dir = LibraryStore::dataDir();
+    ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+void App::performUninstall(bool keepData) {
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring dir(exePath);
+    const size_t slash = dir.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) dir = dir.substr(0, slash);
+    const std::wstring uninstaller = dir + L"\\uninstall.exe";
+    if (GetFileAttributesW(uninstaller.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        uninstallDialogRequested_ = false;
+        setStatus("这是免安装版（没有 uninstall.exe）：直接删掉程序目录即可，数据在 .bilimusic", true);
+        return;
+    }
+    // 延迟批处理：等本进程退出（音频/文件解锁）→ 按选择删数据 → 静默卸载 → 自删
+    wchar_t tempDir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempDir);
+    const std::wstring batPath = std::wstring(tempDir) + L"bilimusic-uninstall-app.bat";
+    std::string script = "@echo off\r\nping -n 3 127.0.0.1 >nul\r\n";
+    if (!keepData) {
+        script += "rd /s /q \"" + wideToUtf8(LibraryStore::dataDir()) + "\"\r\n";
+    }
+    script += "start \"\" \"" + wideToUtf8(uninstaller) + "\" /S\r\n";
+    script += "del \"%~f0\"\r\n";
+    FILE* file = _wfopen(batPath.c_str(), L"wb");
+    if (file == nullptr) {
+        uninstallDialogRequested_ = false;
+        setStatus("写卸载脚本失败（%TEMP% 不可写）", true);
+        return;
+    }
+    fwrite(script.data(), 1, script.size(), file);
+    fclose(file);
+
+    std::wstring command = L"cmd.exe /c \"" + batPath + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    const BOOL launched = CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE,
+                                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+    if (launched) {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    AppLog::info("App", keepData ? "应用内卸载：保留歌单与登录" : "应用内卸载：同时删除数据");
+    setStatus(keepData ? "正在卸载（保留歌单与登录）…" : "正在卸载（含歌单与登录）…");
+    uninstallDialogRequested_ = false;
+    settingsDialogRequested_ = false;
+    quitRequested_ = true;  // 主循环看到后真退出，交给批处理继续
 }
 
 bool App::reloadCurrentMediaAt(double positionMs, bool resumeIfPlaying) {
@@ -2990,6 +3044,84 @@ void App::drawM3Dialogs() {
         ImGui::EndPopup();
     }
 
+    // ---- 设置 ----
+    if (settingsDialogRequested_) ImGui::OpenPopup("设置");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("设置", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!settingsDialogRequested_) ImGui::CloseCurrentPopup();
+        const std::string dataDir = wideToUtf8(LibraryStore::dataDir());
+        ImGui::Text("bilimusic v%s", BILIMUSIC_VERSION);
+        ImGui::TextDisabled("数据目录：%s", dataDir.c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("打开数据目录", ImVec2(150.0f, 32.0f))) openDataFolder();
+        ImGui::SameLine();
+        if (ImGui::Button("播放缓存设置…", ImVec2(150.0f, 32.0f))) {
+            settingsDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+            cacheSettingsDialogRequested_ = true;
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::TextDisabled("卸载只删除程序本体；歌单 / 登录 / 缓存是否保留，在下一步里选。");
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.18f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.86f, 0.24f, 0.24f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.14f, 0.14f, 1.0f));
+        if (ImGui::Button("卸载 bilimusic…", ImVec2(170.0f, 32.0f))) {
+            settingsDialogRequested_ = false;
+            uninstallDialogRequested_ = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine();
+        // 关闭用中性色，和红色的「卸载」区分开
+        ImGui::PushStyleColor(ImGuiCol_Button, Ui::Vec4(Ui::Colors::Hover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Ui::Vec4(Ui::Colors::Active));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Ui::Vec4(Ui::Colors::Active));
+        if (ImGui::Button("关闭", ImVec2(110.0f, 32.0f))) {
+            settingsDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::EndPopup();
+    }
+
+    // ---- 卸载确认（可选是否保留歌单 / 登录）----
+    if (uninstallDialogRequested_) ImGui::OpenPopup("卸载 bilimusic");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("卸载 bilimusic", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!uninstallDialogRequested_) ImGui::CloseCurrentPopup();
+        const std::string dataDir = wideToUtf8(LibraryStore::dataDir());
+        ImGui::TextUnformatted("确定要卸载 bilimusic 吗？程序会立即退出，随后删除安装目录。");
+        ImGui::Spacing();
+        bool keep = uninstallKeepData_;
+        if (ImGui::Checkbox("保留歌单与登录信息（推荐）", &keep)) uninstallKeepData_ = keep;
+        if (uninstallKeepData_) {
+            ImGui::TextDisabled("保留：%s 原样不动，重装后歌单 / 登录 / 缓存 / 下载都在。",
+                                dataDir.c_str());
+        } else {
+            ImGui::TextDisabled("不保留：会连 %s 一起删掉（歌单、登录、缓存、下载全部清空）。",
+                                dataDir.c_str());
+        }
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.18f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.86f, 0.24f, 0.24f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.14f, 0.14f, 1.0f));
+        if (ImGui::Button("卸载", ImVec2(120.0f, 32.0f))) performUninstall(uninstallKeepData_);
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, Ui::Vec4(Ui::Colors::Hover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Ui::Vec4(Ui::Colors::Active));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Ui::Vec4(Ui::Colors::Active));
+        if (ImGui::Button("取消", ImVec2(120.0f, 32.0f))) {
+            uninstallDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::EndPopup();
+    }
+
     // ---- 定时关闭 ----
     if (sleepDialogRequested_) ImGui::OpenPopup("定时关闭");
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -3427,6 +3559,7 @@ void App::draw() {
         outputDeviceDialogRequested_ = true;
     }
     if (sidebarActions.openCacheSettings) cacheSettingsDialogRequested_ = true;
+    if (sidebarActions.openSettings) settingsDialogRequested_ = true;
     if (sidebarActions.toggleActionsExpanded) {
         sidebarActionsExpanded_ = !sidebarActionsExpanded_;
         bili_.setSetting("ui.sidebar_actions_expanded", sidebarActionsExpanded_ ? "1" : "0");

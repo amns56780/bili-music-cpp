@@ -186,6 +186,33 @@ int main(int argc, char** argv) {
         return stream.ok ? 0 : 4;
     }
 
+    // ---------------- 单实例 ----------------
+    // 已有实例在跑：把它的窗口唤到前台（即使收进了托盘），本进程直接退出，
+    // 避免两个窗口共用同一份数据互相覆盖设置。
+    HANDLE instanceMutex = CreateMutexW(nullptr, TRUE, L"Local\\bilimusic-single-instance");
+    if (instanceMutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
+        bool signaled = false;
+        for (int attempt = 0; attempt < 20 && !signaled; ++attempt) {
+            HANDLE showEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\bilimusic-show-window");
+            if (showEvent != nullptr) {
+                SetEvent(showEvent);
+                CloseHandle(showEvent);
+                signaled = true;
+                break;
+            }
+            Sleep(100);
+        }
+        if (!signaled) {
+            if (HWND existing = FindWindowW(nullptr, L"bilimusic")) {
+                ShowWindow(existing, SW_SHOW);
+                ShowWindow(existing, SW_RESTORE);
+                SetForegroundWindow(existing);
+            }
+        }
+        CloseHandle(instanceMutex);
+        return 0;
+    }
+
     glfwSetErrorCallback(glfwErrorCallback);
     if (!glfwInit()) {
         return 1;
@@ -234,6 +261,8 @@ int main(int argc, char** argv) {
 
     HWND nativeWindow = glfwGetWin32Window(window);
     bool exitRequested = false;
+    // 第二个实例用这个事件唤醒本进程的窗口（收进托盘时也能拉回来）
+    HANDLE showWindowEvent = CreateEventW(nullptr, FALSE, FALSE, L"Local\\bilimusic-show-window");
     platform::SystemTray tray;
     platform::TrayCallbacks trayCallbacks;
     trayCallbacks.onShowWindow = [&]() {
@@ -256,6 +285,16 @@ int main(int argc, char** argv) {
         glfwPollEvents();
         // 后台（收进托盘）也要跑播放状态/自动切歌/异步事件，不能只在 draw() 里做
         app.tick();
+        // 又启动了一次 → 把已有窗口拉到前台
+        if (showWindowEvent != nullptr &&
+            WaitForSingleObject(showWindowEvent, 0) == WAIT_OBJECT_0) {
+            trayCallbacks.onShowWindow();
+        }
+        // 应用内点了「卸载」→ 真正退出（否则会被当成收进托盘）
+        if (app.quitRequested()) {
+            exitRequested = true;
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
         // 播放时阻止熄屏/休眠（M4）
         const bool wantPreventSleep = app.playbackActive();
         if (wantPreventSleep != preventSleep) {

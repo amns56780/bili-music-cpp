@@ -109,11 +109,11 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
 
     // ---------------- 歌单列表 ----------------
     const float listTop = 146.0f;
-    // 底部区域：折叠标题行 +（展开时的 4 个入口）
+    // 底部区域：折叠标题行 +（展开时的 5 个入口）
     const float actionsHeaderHeight = 30.0f;
     const float actionRowHeight = 36.0f;
     const float bottomArea = 8.0f + actionsHeaderHeight +
-                             (actionsExpanded ? 4.0f * actionRowHeight : 0.0f) + 6.0f;
+                             (actionsExpanded ? 5.0f * actionRowHeight : 0.0f) + 6.0f;
     const float statusArea = statusText.empty() ? 0.0f : 22.0f;
     const float listHeight = height - listTop - bottomArea - statusArea;
     if (listHeight > 40.0f) {
@@ -205,6 +205,12 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
                           "导入歌单（" + std::to_string(playlistCount) + "）", 36.0f,
                           "从 B 站收藏夹 / UP 主投稿 / 合集 / 视频链接导入歌单")) {
             actions->toggleImportMenu = true;
+        }
+        actionY += actionRowHeight;
+        ImGui::SetCursorPos(ImVec2(8.0f, actionY));
+        if (SidebarAction("app_settings", Icons::Settings, "设置", 36.0f,
+                          "版本信息、数据目录、播放缓存、卸载")) {
+            actions->openSettings = true;
         }
     }
 }
