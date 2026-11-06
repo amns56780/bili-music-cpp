@@ -2824,6 +2824,10 @@ void App::drawM3Dialogs() {
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("导入歌单", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         if (!importSourceDialogRequested_) ImGui::CloseCurrentPopup();
+        // 这个弹窗里的按钮不用品牌红：比对话框底色（#202024）略淡一档的灰，更接近菜单项
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.165f, 0.165f, 0.192f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.208f, 0.208f, 0.235f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.235f, 0.235f, 0.267f, 1.0f));
         ImGui::TextUnformatted("选择要导入的来源：");
         ImGui::Spacing();
         if (ImGui::Button("收藏夹", ImVec2(150.0f, 36.0f))) {
@@ -2857,10 +2861,47 @@ void App::drawM3Dialogs() {
             importInputRequested_ = true;
         }
         ImGui::Spacing();
-        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+        if (ImGui::Button("分享链接", ImVec2(150.0f, 36.0f))) {
+            importSourceDialogRequested_ = false;
+            shareLinkInput_[0] = '\0';
+            shareLinkImportDialogRequested_ = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(150.0f, 36.0f))) {
             importSourceDialogRequested_ = false;
             ImGui::CloseCurrentPopup();
         }
+        ImGui::PopStyleColor(3);
+        ImGui::EndPopup();
+    }
+
+    // ---- 从分享链接导入 ----
+    if (shareLinkImportDialogRequested_) ImGui::OpenPopup("从分享链接导入");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("从分享链接导入", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!shareLinkImportDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextUnformatted("粘贴歌单分享链接（bm://pl/v1/…）：");
+        ImGui::TextDisabled("另一台设备的「歌单 → 分享歌单」会生成这种链接，导入后逐首取信息。");
+        ImGui::Spacing();
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        ImGui::SetNextItemWidth(520.0f);
+        ImGui::InputText("##share_link_input", shareLinkInput_, sizeof(shareLinkInput_));
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.165f, 0.165f, 0.192f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.208f, 0.208f, 0.235f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.235f, 0.235f, 0.267f, 1.0f));
+        if (ImGui::Button("导入", ImVec2(150.0f, 34.0f))) {
+            shareLinkImportDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+            startShareLinkImport(shareLinkInput_);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(150.0f, 34.0f))) {
+            shareLinkImportDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
         ImGui::EndPopup();
     }
 

@@ -352,6 +352,9 @@ private:
     // 歌单分享
     bool shareLinkDialogRequested_ = false;
     std::string shareLinkText_;
+    // 「导入歌单 → 分享链接」输入框
+    bool shareLinkImportDialogRequested_ = false;
+    char shareLinkInput_[8192] = {};
     // 歌单内搜索（空 = 不过滤）
     char playlistSearch_[128] = {};
     std::string playlistSearchText_;
