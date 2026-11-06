@@ -1,6 +1,6 @@
 # 路线图（C++ 桌面版）
 
-目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端。**M1–M5 已全部完成，当前版本 v1.0.6，可日常使用。**
+目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端。**M1–M5 已全部完成，当前版本 v1.0.7，可日常使用。**
 
 ## M1 · 工程骨架 + 播放内核（已完成）
 
@@ -71,6 +71,12 @@
     - 历史：早期用 7zSD.sfx + py7zr 写 LZMA1 载荷；自定义 SFX 曾被卡巴斯基删文件，已废弃并换成官方 NSIS
 - [x] 体积/内存/启动时间对比 Java 版：启动 0.66–0.81s、Working Set 215–241MB（Java 版约 3.2s / 430MB）
 - [x] exe VERSIONINFO / 安装器图标 / 注册表 DisplayVersion 统一来自 CMake VERSION
+
+## v1.0.7（2026-11-06）
+
+- [x] view 接口解析 `pic`，VideoInfo 增加 coverUrl
+- [x] 分享链接导入写入 coverUrl（新导入直接带封面）
+- [x] 「从歌单视频选封面」新增「补全缺失封面」，回填老歌单的空封面（LibraryStore::setSongCover）
 
 ## v1.0.6（2026-11-06）
 

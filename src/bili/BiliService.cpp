@@ -410,6 +410,7 @@ VideoInfo BiliService::fetchVideo(const std::string& bvid) {
         info.title = data.value("title", std::string());
         const nlohmann::json owner = data.value("owner", nlohmann::json::object());
         info.artist = owner.value("name", std::string());
+        info.coverUrl = data.value("pic", std::string());
         info.durationMs = (long long)data.value("duration", 0) * 1000;
     } catch (const std::exception& exception) {
         info.message = std::string("view 解析失败：") + exception.what();

@@ -565,6 +565,17 @@ bool LibraryStore::setSongLocalPath(int64_t songId, const std::string& localPath
     return false;
 }
 
+bool LibraryStore::setSongCover(int64_t songId, const std::string& coverUrl) {
+    for (StoredSong& song : songs_) {
+        if (song.id != songId) continue;
+        if (song.coverUrl == coverUrl) return true;
+        song.coverUrl = coverUrl;
+        save(nullptr);
+        return true;
+    }
+    return false;
+}
+
 bool LibraryStore::setPlaylistCover(int64_t id, const std::string& coverUrl,
                                     const std::string& coverPath) {
     for (StoredPlaylist& playlist : playlists_) {

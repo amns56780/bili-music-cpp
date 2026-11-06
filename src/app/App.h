@@ -62,7 +62,8 @@ private:
             DownloadDone,
             LocalScanDone,
             Prefetched,
-            CacheReady
+            CacheReady,
+            Covers
         };
         Kind kind = Kind::Login;
         bool ok = false;
@@ -99,6 +100,8 @@ private:
         std::string filePath;
         std::vector<std::string> localPaths;
         bool forceNew = false;  // 分享链接导入：每次都新建歌单，不复用同来源
+        // 补全封面：songId -> coverUrl
+        std::vector<std::pair<long long, std::string>> covers;
     };
 
     // 重名对话框后续动作
@@ -181,6 +184,8 @@ private:
     // 歌单分享（bm://pl/v1/…，与 Java 版同一协议）
     void startShareLinkImport(const std::string& text);
     void shareCurrentPlaylist();
+    // 补全当前歌单里缺失的视频封面（老版本导入的歌单没有 coverUrl）
+    void backfillMissingCovers();
     void prefetchNextSong();
     // 整首缓存（激进缓存）：后台下载完整音频到 ~/.bilimusic/cache，播本地文件实现秒 seek
     void startCacheDownload(long long songId, const std::string& bvid, long long cid,

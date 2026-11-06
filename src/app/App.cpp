@@ -655,6 +655,7 @@ void App::startShareLinkImport(const std::string& text) {
             song.bvid = video.bvid.empty() ? raw : video.bvid;
             song.title = video.title;
             song.artist = video.artist;
+            song.coverUrl = video.coverUrl;
             song.cid = video.cid;
             song.durationMs = video.durationMs;
             result.songs.push_back(std::move(song));
@@ -700,6 +701,33 @@ void App::shareCurrentPlaylist() {
     setStatus("分享链接已复制到剪贴板（" + std::to_string(bvids.size()) + " 首）");
     AppLog::info("App", "生成歌单分享链接：" + playlist->title + " " +
                             std::to_string(bvids.size()) + " 首");
+}
+
+void App::backfillMissingCovers() {
+    const StoredPlaylist* playlist = currentPlaylist();
+    if (playlist == nullptr) return;
+    std::vector<std::pair<long long, std::string>> targets;  // songId, bvid
+    for (const StoredSong* song : currentSongs()) {
+        if (song == nullptr || !song->coverUrl.empty() || song->bvid.empty()) continue;
+        targets.emplace_back(song->id, song->bvid);
+    }
+    if (targets.empty()) {
+        setStatus("这个歌单的曲目都已经有封面了");
+        return;
+    }
+    setStatus("正在补全封面（" + std::to_string(targets.size()) + " 首）…");
+    AppLog::info("App", "开始补全封面 " + std::to_string(targets.size()) + " 首");
+    std::thread([this, targets]() {
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::Covers;
+        event.ok = true;
+        for (const auto& item : targets) {
+            const bili::VideoInfo video = bili_.fetchVideo(item.second);
+            if (!video.ok || video.coverUrl.empty()) continue;
+            event.covers.emplace_back(item.first, video.coverUrl);
+        }
+        postAsync(std::move(event));
+    }).detach();
 }
 
 void App::playSongById(long long songId) {
@@ -1983,6 +2011,20 @@ void App::pollAsync() {
             handleCacheReady(event);
             continue;
         }
+        if (event.kind == AsyncEvent::Kind::Covers) {
+            int filled = 0;
+            for (const auto& pair : event.covers) {
+                if (pair.second.empty()) continue;
+                if (store_.setSongCover(pair.first, pair.second)) ++filled;
+            }
+            if (filled > 0) {
+                setStatus("已补全 " + std::to_string(filled) + " 首曲目的视频封面");
+                AppLog::info("App", "补全封面 " + std::to_string(filled) + " 首");
+            } else {
+                setStatus("没有补到新的封面（接口可能没返回 pic）", true);
+            }
+            continue;
+        }
         if (event.kind == AsyncEvent::Kind::Prefetched) {
             if (event.ok && event.songId >= 0) {
                 CachedStream entry;
@@ -3093,6 +3135,20 @@ void App::drawM3Dialogs() {
             ImGui::EndGroup();
 
             ImGui::Spacing();
+            int missingCovers = 0;
+            for (const StoredSong* song : coverSongs) {
+                if (song->bvid.empty()) continue;
+                if (song->coverUrl.empty()) ++missingCovers;
+            }
+            if (missingCovers > 0) {
+                // 老版本分享导入没写 coverUrl，这里给一次补全入口
+                if (ImGui::Button("补全缺失封面", ImVec2(140.0f, 32.0f))) {
+                    backfillMissingCovers();
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("%d 首还没有封面（取一次视频信息后就有了）", missingCovers);
+                ImGui::Spacing();
+            }
             long long applySongId = -1;
             if (selectedSong != nullptr) {
                 ImGui::TextDisabled("已选：%s", Ui::DisplayText(selectedSong->title).c_str());

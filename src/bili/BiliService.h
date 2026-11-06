@@ -23,6 +23,7 @@ struct VideoInfo {
     long long cid = 0;
     std::string title;
     std::string artist;
+    std::string coverUrl;  // 视频封面（view 接口的 pic）
     long long durationMs = 0;
     std::string message;
 };
