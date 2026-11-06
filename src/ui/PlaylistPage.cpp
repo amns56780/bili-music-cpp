@@ -49,7 +49,8 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
                       const std::vector<const StoredSong*>& songs, long long playingSongId,
                       bool selectMode, const std::set<long long>& selectedSongIds,
                       float contentWidth, float contentHeight, PlaylistPageActions* actions,
-                      const char* statusText, bool statusIsError) {
+                      const char* statusText, bool statusIsError, char* searchText,
+                      int searchCapacity) {
     const ImVec2 windowPos = ImGui::GetWindowPos();
     auto abs = [&](float x, float y) { return ImVec2(windowPos.x + x, windowPos.y + y); };
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -98,6 +99,18 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     ImGui::SetCursorPos(ImVec2(buttonX, buttonY));
     if (GhostButton("select_mode", "多选")) actions->toggleSelectMode = true;
     buttonX += ImGui::GetItemRectSize().x + 4.0f;
+    // 歌单内搜索：右对齐在按钮行末尾
+    if (searchText != nullptr && searchCapacity > 0) {
+        const float searchWidth = 240.0f;
+        ImGui::SetCursorPos(ImVec2(infoX + infoWidth - searchWidth, buttonY + 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, Colors::TagBg);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 7.0f));
+        ImGui::SetNextItemWidth(searchWidth);
+        ImGui::InputTextWithHint("##playlist_search", "搜索歌单内歌曲 / UP 主",
+                                 searchText, (size_t)searchCapacity);
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    }
     ImGui::SetCursorPos(ImVec2(buttonX, buttonY));
     if (IconButton("page_more", Icons::MoreHoriz, 34.0f, 20.0f, Colors::Text2, false, true,
                    "更多操作")) {
@@ -111,7 +124,7 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         if (ImGui::Selectable("从歌单视频选封面")) actions->pickCoverFromSong = true;
         if (ImGui::Selectable("从本地图片选封面")) actions->pickCoverFromFile = true;
         if (ImGui::Selectable("扫描本地音乐文件夹")) actions->scanLocalMusic = true;
-        if (ImGui::Selectable("分享歌单")) actions->openMenu = true;
+        if (ImGui::Selectable("分享歌单")) actions->sharePlaylist = true;
         ImGui::Separator();
         if (ImGui::Selectable("删除歌单")) actions->requestDelete = true;
         ImGui::EndPopup();

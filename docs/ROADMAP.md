@@ -1,6 +1,6 @@
 # 路线图（C++ 桌面版）
 
-目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端。**M1–M5 已全部完成，当前版本 v1.0.3，可日常使用。**
+目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端。**M1–M5 已全部完成，当前版本 v1.0.4，可日常使用。**
 
 ## M1 · 工程骨架 + 播放内核（已完成）
 
@@ -71,6 +71,14 @@
     - 历史：早期用 7zSD.sfx + py7zr 写 LZMA1 载荷；自定义 SFX 曾被卡巴斯基删文件，已废弃并换成官方 NSIS
 - [x] 体积/内存/启动时间对比 Java 版：启动 0.66–0.81s、Working Set 215–241MB（Java 版约 3.2s / 430MB）
 - [x] exe VERSIONINFO / 安装器图标 / 注册表 DisplayVersion 统一来自 CMake VERSION
+
+## v1.0.4（2026-11-06）
+
+- [x] 歌单分享链接 `bm://pl/v1/…`（编解码与 Java 版 PlaylistShareCodec 一致，base64url + raw deflate）
+- [x] 粘贴分享链接导入整个歌单（逐首取 view 信息，新建歌单，不复用同来源）
+- [x] 下载前确认弹窗（设置里也能看到保存目录）
+- [x] 歌单内搜索（标题 / UP 主子串过滤，参与播放顺序）
+- [x] 引入 miniz（public domain）做 raw deflate/inflate，third_party/miniz
 
 ## v1.0.3（2026-11-06）
 

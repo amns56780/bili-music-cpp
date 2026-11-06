@@ -41,6 +41,7 @@
 #include "ui/TitleBar.h"
 #include "ui/WindowFrame.h"
 #include "util/AppLog.h"
+#include "util/ShareLink.h"
 
 namespace {
 
@@ -431,7 +432,21 @@ const StoredPlaylist* App::currentPlaylist() const {
 }
 
 std::vector<const StoredSong*> App::currentSongs() const {
-    return store_.songsOf(selectedPlaylistId_);
+    std::vector<const StoredSong*> songs = store_.songsOf(selectedPlaylistId_);
+    if (playlistSearchText_.empty()) return songs;
+    // 歌单内搜索：标题 / UP 主 子串匹配（ASCII 不区分大小写，中文按原样）
+    std::string needle = playlistSearchText_;
+    std::transform(needle.begin(), needle.end(), needle.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    std::vector<const StoredSong*> filtered;
+    filtered.reserve(songs.size());
+    for (const StoredSong* song : songs) {
+        std::string hay = song->title + " " + song->artist;
+        std::transform(hay.begin(), hay.end(), hay.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        if (hay.find(needle) != std::string::npos) filtered.push_back(song);
+    }
+    return filtered;
 }
 
 const StoredSong* App::findSong(long long songId) const {
@@ -567,6 +582,11 @@ void App::startOnlinePlay(const StoredSong& song) {
 }
 
 void App::startPastePlay(const std::string& text) {
+    // 歌单分享链接（bm://pl/v1/…）→ 导入整个歌单，而不是当成单曲
+    if (util::IsShareLink(text)) {
+        startShareLinkImport(text);
+        return;
+    }
     const std::string bvid = bili::BiliService::parseBvid(text);
     if (bvid.empty()) {
         setStatus("没有识别到 BV 号，请粘贴完整链接或 BV 号", true);
@@ -595,6 +615,91 @@ void App::startPastePlay(const std::string& text) {
         event.message = stream.message;
         postAsync(std::move(event));
     }).detach();
+}
+
+void App::startShareLinkImport(const std::string& text) {
+    util::SharedPlaylist shared;
+    if (!util::DecodeShareLink(text, &shared)) {
+        setStatus("这不是有效的歌单分享链接（应以 bm://pl/v1/ 开头）", true);
+        return;
+    }
+    if (importRunning_) {
+        setStatus("已有导入任务在进行，等它跑完再试", true);
+        return;
+    }
+    const std::string title = shared.title.empty() ? "分享的歌单" : shared.title;
+    const int total = (int)shared.bvids.size();
+    importRunning_ = true;
+    importProgressText_ = "正在导入分享歌单 0/" + std::to_string(total);
+    setStatus("正在导入分享歌单：" + title + "（" + std::to_string(total) + " 首）");
+    AppLog::info("App", "导入分享歌单：" + title + " 共 " + std::to_string(total) + " 首");
+
+    std::thread([this, shared, title, total]() {
+        bili::ImportedSongsResult result;
+        result.ok = true;
+        result.suggestedTitle = title;
+        int index = 0;
+        for (const std::string& raw : shared.bvids) {
+            ++index;
+            AsyncEvent progress;
+            progress.kind = AsyncEvent::Kind::ImportProgress;
+            progress.progressText =
+                "正在取视频信息 " + std::to_string(index) + "/" + std::to_string(total);
+            progress.progressCurrent = index;
+            progress.progressTotal = total;
+            postAsync(std::move(progress));
+
+            const bili::VideoInfo video = bili_.fetchVideo(raw);
+            if (!video.ok) continue;
+            bili::ImportedSong song;
+            song.bvid = video.bvid.empty() ? raw : video.bvid;
+            song.title = video.title;
+            song.artist = video.artist;
+            song.cid = video.cid;
+            song.durationMs = video.durationMs;
+            result.songs.push_back(std::move(song));
+        }
+        result.total = (int)result.songs.size();
+        if (result.songs.empty()) {
+            result.ok = false;
+            result.message = "链接里的曲目都取不到信息（可能已失效）";
+        }
+
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::ImportDone;
+        event.ok = result.ok;
+        event.sourceType = "SHARE";
+        event.sourceTitle = title;
+        event.desiredTitle = title;
+        event.message = result.message;
+        event.imported = std::move(result);
+        event.forceNew = true;
+        postAsync(std::move(event));
+    }).detach();
+}
+
+void App::shareCurrentPlaylist() {
+    const StoredPlaylist* playlist = currentPlaylist();
+    if (playlist == nullptr) return;
+    std::vector<std::string> bvids;
+    for (const StoredSong& song : store_.songs()) {
+        if (song.playlistId == playlist->id && !song.bvid.empty()) bvids.push_back(song.bvid);
+    }
+    if (bvids.empty()) {
+        setStatus("这个歌单没有在线曲目，本地音乐无法分享", true);
+        return;
+    }
+    const std::string link = util::EncodeShareLink(playlist->title, bvids);
+    if (link.empty()) {
+        setStatus("生成分享链接失败", true);
+        return;
+    }
+    shareLinkText_ = link;
+    shareLinkDialogRequested_ = true;
+    ImGui::SetClipboardText(link.c_str());
+    setStatus("分享链接已复制到剪贴板（" + std::to_string(bvids.size()) + " 首）");
+    AppLog::info("App", "生成歌单分享链接：" + playlist->title + " " +
+                            std::to_string(bvids.size()) + " 首");
 }
 
 void App::playSongById(long long songId) {
@@ -2249,13 +2354,15 @@ void App::finishImport(const AsyncEvent& event) {
         songs.push_back(std::move(song));
     }
 
-    // 同一来源已经导入过 → 直接复用那个歌单
+    // 同一来源已经导入过 → 直接复用那个歌单（分享链接例外：每次都要新建）
+    if (!event.forceNew) {
     if (const StoredPlaylist* existing = store_.findBySource(event.sourceType, sourceTitle)) {
         const int added = store_.addSongs(existing->id, songs);
         selectPlaylist(existing->id);
         setStatus("「" + existing->title + "」导入完成：新增 " + std::to_string(added) + " 首");
         importProgressText_.clear();
         return;
+    }
     }
     // 重名 → 暂存数据，弹「覆盖 / 自动重命名」
     PlaylistNameConflict conflict;
@@ -2514,10 +2621,21 @@ void App::startDownloadCurrent() {
                   true);
         return;
     }
+    // 先弹确认，确认后再真正下载（避免误点一路下到磁盘）
+    downloadSongId_ = playingSongId_;
+    downloadDialogRequested_ = true;
+}
+
+void App::beginDownload(long long downloadSongId) {
+    const StoredSong* song = findSong(downloadSongId);
+    if (song == nullptr || (curStreamUrl_.empty() && song->localPath.empty())) {
+        setStatus("当前曲目没有可下载的在线地址", true);
+        return;
+    }
     const std::string title = song->title;
     const std::string bvid = song->bvid;
     const std::string url = curStreamUrl_;
-    const int64_t songId = playingSongId_;
+    const int64_t songId = downloadSongId;
     setStatus("开始下载「" + title + "」…");
     std::thread([this, title, bvid, url, songId]() {
         AsyncEvent event;
@@ -3044,6 +3162,69 @@ void App::drawM3Dialogs() {
         ImGui::EndPopup();
     }
 
+    // ---- 下载确认 ----
+    if (downloadDialogRequested_) ImGui::OpenPopup("下载歌曲");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("下载歌曲", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!downloadDialogRequested_) ImGui::CloseCurrentPopup();
+        const StoredSong* song = findSong(downloadSongId_);
+        const std::string title = song != nullptr ? song->title : std::string("当前曲目");
+        ImGui::Text("确定下载《%s》？", title.c_str());
+        ImGui::Spacing();
+        ImGui::TextDisabled("保存到 %s\\downloads，下载完成后写回曲目，可离线播放。",
+                            wideToUtf8(LibraryStore::dataDir()).c_str());
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.18f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.86f, 0.24f, 0.24f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.14f, 0.14f, 1.0f));
+        if (ImGui::Button("下载", ImVec2(120.0f, 32.0f))) {
+            downloadDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+            beginDownload(downloadSongId_);
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, Ui::Vec4(Ui::Colors::Hover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Ui::Vec4(Ui::Colors::Active));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Ui::Vec4(Ui::Colors::Active));
+        if (ImGui::Button("取消", ImVec2(120.0f, 32.0f))) {
+            downloadDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::EndPopup();
+    }
+
+    // ---- 分享歌单（bm://pl/v1/…）----
+    if (shareLinkDialogRequested_) ImGui::OpenPopup("分享歌单");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("分享歌单", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!shareLinkDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextUnformatted("把这串链接发到另一台设备，在「粘贴链接」里粘贴即可导入整个歌单。");
+        ImGui::TextDisabled("链接里只有标题和 BV 号，导入端再逐首取信息；不经过任何服务器。");
+        ImGui::Spacing();
+        static char shareBuffer[8192];
+        std::snprintf(shareBuffer, sizeof(shareBuffer), "%s", shareLinkText_.c_str());
+        ImGui::SetNextItemWidth(560.0f);
+        ImGui::InputText("##share_link_text", shareBuffer, sizeof(shareBuffer),
+                         ImGuiInputTextFlags_ReadOnly);
+        ImGui::Spacing();
+        if (ImGui::Button("复制链接", ImVec2(140.0f, 32.0f))) {
+            ImGui::SetClipboardText(shareLinkText_.c_str());
+            setStatus("已复制分享链接");
+        }
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, Ui::Vec4(Ui::Colors::Hover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Ui::Vec4(Ui::Colors::Active));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Ui::Vec4(Ui::Colors::Active));
+        if (ImGui::Button("关闭", ImVec2(110.0f, 32.0f))) {
+            shareLinkDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::EndPopup();
+    }
+
     // ---- 设置 ----
     if (settingsDialogRequested_) ImGui::OpenPopup("设置");
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -3308,7 +3489,7 @@ void App::drawDialogs() {
     }
 
     if (ImGui::BeginPopupModal("播放链接", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("粘贴 B 站视频链接或 BV 号：");
+        ImGui::TextUnformatted("粘贴 B 站视频链接 / BV 号，或歌单分享码（bm://pl/v1/…）：");
         ImGui::SetNextItemWidth(520.0f);
         ImGui::InputText("##link", linkInput_, sizeof(linkInput_));
         ImGui::Spacing();
@@ -3502,7 +3683,9 @@ void App::draw() {
     Ui::PlaylistPageActions pageActions;
     Ui::DrawPlaylistPage(store_, currentPlaylist(), currentSongs(), playingSongId_, selectMode_,
                          selectedSongIds_, io.DisplaySize.x - sidebarWidth, mainHeight, &pageActions,
-                         nullptr, false);
+                         nullptr, false, playlistSearch_, (int)sizeof(playlistSearch_));
+    // 搜索框内容同步到过滤字符串（空串 = 不过滤）
+    if (playlistSearchText_ != playlistSearch_) playlistSearchText_ = playlistSearch_;
     ImGui::EndChild();
 
     // ---------------- 播放条 ----------------
@@ -3585,6 +3768,7 @@ void App::draw() {
 
     if (pageActions.playAll) playFirstPlayable();
     if (pageActions.shufflePlay) shufflePlayPlaylist();
+    if (pageActions.sharePlaylist) shareCurrentPlaylist();
     if (pageActions.playSongId >= 0) playSongFromUser(pageActions.playSongId);
     if (pageActions.toggleSelectMode) {
         selectMode_ = !selectMode_;

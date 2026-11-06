@@ -13,6 +13,7 @@ namespace Ui {
 struct PlaylistPageActions {
     bool playAll = false;
     bool shufflePlay = false;  // 随机播放：模式切随机 + 首曲也从歌单里随机挑
+    bool sharePlaylist = false;  // 分享歌单：生成 bm://pl/v1/… 链接
     bool selectMode = false;
     bool openMenu = false;
     bool requestRename = false;
@@ -39,6 +40,7 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
                       const std::vector<const StoredSong*>& songs, long long playingSongId,
                       bool selectMode, const std::set<long long>& selectedSongIds,
                       float contentWidth, float contentHeight, PlaylistPageActions* actions,
-                      const char* statusText, bool statusIsError);
+                      const char* statusText, bool statusIsError, char* searchText,
+                      int searchCapacity);
 
 }  // namespace Ui

@@ -95,7 +95,7 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
                   linkIcon.c_str());
     draw->AddText(GetFonts().small, 15.0f,
                   ImVec2(linkPos.x + 12.0f + 16.0f + 8.0f, linkPos.y + 7.5f), Colors::Text3,
-                  "粘贴链接 / BV 号播放");
+                  "粘贴链接 / BV 号 / 歌单分享码");
     ImGui::PopID();
     if (linkPressed) actions->pasteLink = true;
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(bilimusic_cpp VERSION 1.0.3 LANGUAGES C CXX)
+project(bilimusic_cpp VERSION 1.0.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,6 +51,10 @@ set(APP_SOURCES
     src/util/AppLog.cpp
     src/util/Md5.cpp
     src/util/QrCode.cpp
+    src/util/ShareLink.cpp
+    third_party/miniz/miniz.c
+    third_party/miniz/miniz_tdef.c
+    third_party/miniz/miniz_tinfl.c
     src/net/HttpClient.cpp
     src/bili/BiliService.cpp
     third_party/qrcodegen/qrcodegen.cpp
@@ -72,7 +76,9 @@ else()
     add_executable(bilimusic WIN32 ${APP_SOURCES})
 endif()
 
-target_include_directories(bilimusic PRIVATE src third_party third_party/qrcodegen third_party/stb)
+target_include_directories(bilimusic PRIVATE src third_party third_party/qrcodegen third_party/stb
+                                  third_party/miniz)
+target_compile_definitions(bilimusic PRIVATE MINIZ_NO_ARCHIVE_APIS)
 target_link_libraries(bilimusic PRIVATE imgui)
 
 if (MINGW)

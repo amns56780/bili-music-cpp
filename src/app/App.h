@@ -98,6 +98,7 @@ private:
         std::string desiredTitle;
         std::string filePath;
         std::vector<std::string> localPaths;
+        bool forceNew = false;  // 分享链接导入：每次都新建歌单，不复用同来源
     };
 
     // 重名对话框后续动作
@@ -175,7 +176,11 @@ private:
     void toggleImmersiveFullscreen();
     void pickImmersiveImage();
     void drawImmersive();
-    void startDownloadCurrent();
+    void startDownloadCurrent();          // 弹「确认下载」对话框
+    void beginDownload(long long songId); // 确认后真正下载
+    // 歌单分享（bm://pl/v1/…，与 Java 版同一协议）
+    void startShareLinkImport(const std::string& text);
+    void shareCurrentPlaylist();
     void prefetchNextSong();
     // 整首缓存（激进缓存）：后台下载完整音频到 ~/.bilimusic/cache，播本地文件实现秒 seek
     void startCacheDownload(long long songId, const std::string& bvid, long long cid,
@@ -341,6 +346,15 @@ private:
     // 播放缓存范围（秒）：2/5/10/20，写入 audio.network_cache
     int networkCacheSeconds_ = 5;
     bool cacheSettingsDialogRequested_ = false;
+    // 下载确认
+    bool downloadDialogRequested_ = false;
+    long long downloadSongId_ = -1;
+    // 歌单分享
+    bool shareLinkDialogRequested_ = false;
+    std::string shareLinkText_;
+    // 歌单内搜索（空 = 不过滤）
+    char playlistSearch_[128] = {};
+    std::string playlistSearchText_;
     // 设置 / 卸载
     bool settingsDialogRequested_ = false;
     bool uninstallDialogRequested_ = false;
