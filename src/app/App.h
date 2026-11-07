@@ -63,7 +63,8 @@ private:
             LocalScanDone,
             Prefetched,
             CacheReady,
-            Covers
+            Covers,
+            AddSong
         };
         Kind kind = Kind::Login;
         bool ok = false;
@@ -102,6 +103,9 @@ private:
         bool forceNew = false;  // 分享链接导入：每次都新建歌单，不复用同来源
         // 补全封面：songId -> coverUrl
         std::vector<std::pair<long long, std::string>> covers;
+        // 添加单曲到歌单（Kind::AddSong）：songId 复用为 playlistId
+        std::string coverUrl;
+        long long durationMs = 0;
     };
 
     // 重名对话框后续动作
@@ -145,6 +149,8 @@ private:
                             const std::string& title, const std::string& artist);
     void startLoginCheck();
     void startPastePlay(const std::string& text);
+    // 粘贴 BV / 链接 → 添加到当前歌单（不播放）
+    void startAddSongToPlaylist(const std::string& text);
     void postAsync(AsyncEvent event);
     void pollAsync();
     void drawDialogs();

@@ -654,6 +654,41 @@ void App::startPastePlay(const std::string& text) {
     }).detach();
 }
 
+void App::startAddSongToPlaylist(const std::string& text) {
+    const StoredPlaylist* playlist = currentPlaylist();
+    if (playlist == nullptr) {
+        setStatus("先选一个歌单，再往里加单曲", true);
+        return;
+    }
+    if (util::IsShareLink(text)) {
+        setStatus("这是歌单分享链接，请用「播放」或「导入歌单 → 分享链接」导入整个歌单", true);
+        return;
+    }
+    const std::string bvid = bili::BiliService::parseBvid(text);
+    if (bvid.empty()) {
+        setStatus("没有识别到 BV 号，请粘贴完整链接或 BV 号", true);
+        return;
+    }
+    const long long playlistId = playlist->id;
+    const std::string playlistTitle = playlist->title;
+    setStatus("正在添加 " + bvid + " 到「" + playlistTitle + "」…");
+    std::thread([this, bvid, playlistId]() {
+        AsyncEvent event;
+        event.kind = AsyncEvent::Kind::AddSong;
+        event.songId = playlistId;
+        event.bvid = bvid;
+        const bili::VideoInfo video = bili_.fetchVideo(bvid);
+        event.ok = video.ok;
+        event.title = video.title;
+        event.artist = video.artist;
+        event.cid = video.cid;
+        event.coverUrl = video.coverUrl;
+        event.durationMs = video.durationMs;
+        event.message = video.message;
+        postAsync(std::move(event));
+    }).detach();
+}
+
 void App::startShareLinkImport(const std::string& text) {
     util::SharedPlaylist shared;
     if (!util::DecodeShareLink(text, &shared)) {
@@ -2069,6 +2104,27 @@ void App::pollAsync() {
         }
         if (event.kind == AsyncEvent::Kind::CacheReady) {
             handleCacheReady(event);
+            continue;
+        }
+        if (event.kind == AsyncEvent::Kind::AddSong) {
+            if (!event.ok) {
+                setStatus("添加失败：" + (event.message.empty() ? event.bvid : event.message), true);
+                continue;
+            }
+            StoredSong song;
+            song.bvid = event.bvid;
+            song.cid = event.cid;
+            song.title = event.title;
+            song.artist = event.artist;
+            song.coverUrl = event.coverUrl;
+            song.durationMs = event.durationMs;
+            const int added = store_.addSongs(event.songId, {song});
+            if (added > 0) {
+                setStatus("已添加「" + event.title + "」到歌单");
+                AppLog::info("App", "添加单曲到歌单：" + event.bvid + " " + event.title);
+            } else {
+                setStatus("「" + event.title + "」已经在这个歌单里了", true);
+            }
             continue;
         }
         if (event.kind == AsyncEvent::Kind::Covers) {
@@ -3674,7 +3730,22 @@ void App::drawDialogs() {
             }
         }
         ImGui::SameLine();
+        if (ImGui::Button("添加到歌单", ImVec2(140.0f, 32.0f))) {
+            const std::string input = linkInput_;
+            if (!input.empty()) {
+                startAddSongToPlaylist(input);
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
         if (ImGui::Button("取消", ImVec2(110.0f, 32.0f)) || escapePressed) ImGui::CloseCurrentPopup();
+        const StoredPlaylist* target = currentPlaylist();
+        if (target != nullptr) {
+            ImGui::TextDisabled("「添加到歌单」会把它加到当前歌单：%s",
+                                Ui::DisplayText(target->title).c_str());
+        } else {
+            ImGui::TextDisabled("「添加到歌单」需要先在左侧选一个歌单");
+        }
         ImGui::EndPopup();
     }
 
