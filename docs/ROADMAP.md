@@ -1,6 +1,6 @@
 # 路线图（C++ 桌面版）
 
-目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端。**M1–M5 已全部完成，当前版本 v1.0.9，可日常使用。**
+目标：在保留 Kotlin/Java 版的同时，用 C++ 做一版原生桌面端。**M1–M5 已全部完成，当前版本 v1.0.10，可日常使用。**
 
 ## M1 · 工程骨架 + 播放内核（已完成）
 
@@ -71,6 +71,12 @@
     - 历史：早期用 7zSD.sfx + py7zr 写 LZMA1 载荷；自定义 SFX 曾被卡巴斯基删文件，已废弃并换成官方 NSIS
 - [x] 体积/内存/启动时间对比 Java 版：启动 0.66–0.81s、Working Set 215–241MB（Java 版约 3.2s / 430MB）
 - [x] exe VERSIONINFO / 安装器图标 / 注册表 DisplayVersion 统一来自 CMake VERSION
+
+## v1.0.10（2026-11-07）
+
+- [x] 修复输出设备切换无效：aout 模块先钉 mmdevice，起播后在活 player 上重设 + 回读重试
+- [x] WASAPI 会话级校验（AppVolume::findSessionDeviceId），确认过的设备不重复核对
+- [x] 输出设备弹窗显示「当前实际输出 + 已生效/未生效」
 
 ## v1.0.9（2026-11-07）
 

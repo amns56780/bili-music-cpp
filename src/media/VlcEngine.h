@@ -42,9 +42,14 @@ public:
         std::string name;
     };
     std::vector<AudioDevice> audioOutputDevices() const;
-    void setAudioOutputDevice(const std::string& id) { outputDeviceId_ = id; }
+    void setAudioOutputDevice(const std::string& id) {
+        if (id != outputDeviceId_) confirmedDeviceId_.clear();
+        outputDeviceId_ = id;
+    }
     std::string audioOutputDevice() const { return outputDeviceId_; }
     void applyOutputDevice();  // 对当前播放器应用已选设备
+    // 本进程音频会话实际挂在哪个设备上（空串 = 还没出声）
+    std::string outputDeviceInUse() { return appVolume_.findSessionDeviceId(); }
 
     void togglePause();
     void resumeByPlay();  // 用 libvlc_media_player_play 恢复（自检对比用）
@@ -94,4 +99,11 @@ private:
     bool volumeApplied_ = false;
     uint64_t volumeCheckTick_ = 0;
     int lastVlcVolume_ = -1;
+    // 切换输出设备后回读校验（确认 VLC 真的换了，而不是只在界面上显示换了）
+    void verifyOutputDevice();
+    uint64_t deviceVerifyTick_ = 0;
+    bool deviceVerifyLogged_ = false;
+    int deviceVerifyAttempts_ = 0;
+    // 已经确认生效过的设备 id：确认过就不再每首歌重复核对（避免每次起播都动一下 aout）
+    std::string confirmedDeviceId_;
 };

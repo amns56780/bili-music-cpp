@@ -44,6 +44,15 @@ const GUID kIidSimpleAudioVolume = {
 const GUID kIidAudioMeterInformation = {
     0xC02216F6, 0x8C67, 0x4B5B, {0x9D, 0x00, 0xD0, 0x08, 0xE7, 0x3E, 0x00, 0x64}};
 
+std::string wideToUtf8Local(const wchar_t* text) {
+    if (text == nullptr) return {};
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 1) return {};
+    std::string out((size_t)(size - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text, -1, out.data(), size - 1, nullptr, nullptr);
+    return out;
+}
+
 template <typename T>
 void safeRelease(T*& pointer) {
     if (pointer != nullptr) {
@@ -109,6 +118,58 @@ bool AppVolume::refresh() {
     lastRetryTick_ = 0;
     AppLog::info("AppVolume", "音频会话已失效，重新绑定");
     return ensureSession();
+}
+
+std::string AppVolume::findSessionDeviceId() {
+    if (enumerator_ == nullptr) return {};
+    IMMDeviceCollection* collection = nullptr;
+    if (FAILED(enumerator_->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection)) ||
+        collection == nullptr) {
+        return {};
+    }
+    UINT deviceCount = 0;
+    collection->GetCount(&deviceCount);
+    const DWORD currentPid = GetCurrentProcessId();
+    std::string found;
+    for (UINT d = 0; d < deviceCount && found.empty(); ++d) {
+        IMMDevice* device = nullptr;
+        if (FAILED(collection->Item(d, &device)) || device == nullptr) continue;
+        IAudioSessionManager2* manager = nullptr;
+        if (SUCCEEDED(device->Activate(kIidAudioSessionManager2, CLSCTX_ALL, nullptr,
+                                       (void**)&manager)) &&
+            manager != nullptr) {
+            IAudioSessionEnumerator* sessions = nullptr;
+            if (SUCCEEDED(manager->GetSessionEnumerator(&sessions)) && sessions != nullptr) {
+                int sessionCount = 0;
+                sessions->GetCount(&sessionCount);
+                for (int s = 0; s < sessionCount && found.empty(); ++s) {
+                    IAudioSessionControl* control = nullptr;
+                    if (FAILED(sessions->GetSession(s, &control)) || control == nullptr) continue;
+                    IAudioSessionControl2* control2 = nullptr;
+                    if (SUCCEEDED(control->QueryInterface(kIidAudioSessionControl2,
+                                                          (void**)&control2)) &&
+                        control2 != nullptr) {
+                        DWORD pid = 0;
+                        control2->GetProcessId(&pid);
+                        if (pid == currentPid) {
+                            LPWSTR id = nullptr;
+                            if (SUCCEEDED(device->GetId(&id)) && id != nullptr) {
+                                found = wideToUtf8Local(id);
+                                CoTaskMemFree(id);
+                            }
+                        }
+                        control2->Release();
+                    }
+                    control->Release();
+                }
+                sessions->Release();
+            }
+            manager->Release();
+        }
+        device->Release();
+    }
+    collection->Release();
+    return found;
 }
 
 bool AppVolume::ensureSession() {

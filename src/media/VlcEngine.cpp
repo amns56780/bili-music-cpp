@@ -145,6 +145,9 @@ struct VlcEngine::Api {
     char* (*libvlc_audio_output_device_longname)(void* instance, const char* module, int index);
     char* (*libvlc_audio_output_device_id)(void* instance, const char* module, int index);
     void (*libvlc_audio_output_device_set)(void* player, const char* module, const char* deviceId);
+    // 可选符号：强制指定 aout 模块 / 回读当前设备（用于确认切换是否真的生效）
+    int (*libvlc_audio_output_set)(void* player, const char* name);
+    char* (*libvlc_audio_output_device_get)(void* player);
     void (*libvlc_free)(void* pointer);
 };
 
@@ -224,6 +227,11 @@ bool VlcEngine::init(std::string* error) {
     resolveSymbol(module, "libvlc_audio_output_device_set", api->libvlc_audio_output_device_set, ok,
                   error);
     resolveSymbol(module, "libvlc_free", api->libvlc_free, ok, error);
+    // 这两个在 VLC 3.0 都有，但个别精简构建可能没有：单独取，拿不到也不影响启动
+    api->libvlc_audio_output_set =
+        (int (*)(void*, const char*))GetProcAddress((HMODULE)module, "libvlc_audio_output_set");
+    api->libvlc_audio_output_device_get =
+        (char* (*)(void*))GetProcAddress((HMODULE)module, "libvlc_audio_output_device_get");
     if (!ok) { delete api; return false; }
 
     // 和 Java 版一致：不做视频、安静启动、只播音频
@@ -414,7 +422,53 @@ std::vector<VlcEngine::AudioDevice> VlcEngine::audioOutputDevices() const {
 
 void VlcEngine::applyOutputDevice() {
     if (!api_ || !player_ || outputDeviceId_.empty()) return;
+    // 先把这个 player 的 aout 模块钉死成 mmdevice，再指定设备：
+    // 只调 device_set 时，如果当前 aout 不是 mmdevice（或还没建），VLC 会静默忽略。
+    if (api_->libvlc_audio_output_set != nullptr) {
+        api_->libvlc_audio_output_set(player_, "mmdevice");
+    }
     api_->libvlc_audio_output_device_set(player_, "mmdevice", outputDeviceId_.c_str());
+    if (confirmedDeviceId_ == outputDeviceId_) return;  // 这台设备已经确认生效，不必每首重新核对
+    deviceVerifyTick_ = GetTickCount64() + 600;  // 起播后 600ms 回读一次，确认真的切过去了
+    deviceVerifyLogged_ = false;
+    deviceVerifyAttempts_ = 0;
+}
+
+void VlcEngine::verifyOutputDevice() {
+    // VLC 3.0 没有「回读当前设备」的 API（libvlc_audio_output_device_get 是 4.0 的），
+    // 所以这里改成看 WASAPI：本进程的音频会话实际挂在哪个 render endpoint 上。
+    if (deviceVerifyLogged_) return;
+    if (deviceVerifyTick_ == 0 || GetTickCount64() < deviceVerifyTick_) return;
+    deviceVerifyLogged_ = true;
+    deviceVerifyTick_ = 0;
+    if (outputDeviceId_.empty()) return;
+    const std::string actual = appVolume_.findSessionDeviceId();
+    if (actual.empty()) {
+        AppLog::info("VlcEngine", "输出设备核对：还没有音频会话（未出声），跳过");
+        return;
+    }
+    if (actual == outputDeviceId_) {
+        confirmedDeviceId_ = outputDeviceId_;
+        AppLog::info("VlcEngine", std::string("输出设备核对：请求=") + outputDeviceId_ + "  会话实际=" +
+                                   actual + "  ✅ 已生效");
+        return;
+    }
+    // 首次起播时 aout 还没建好，开播前设的设备会被 VLC 丢掉。
+    // 这里在「已有 aout」的状态下再设一次（最多重试 2 次），再回读确认。
+    if (deviceVerifyAttempts_ < 2) {
+        ++deviceVerifyAttempts_;
+        AppLog::info("VlcEngine", "输出设备未生效，第 " + std::to_string(deviceVerifyAttempts_) +
+                                      " 次在已起播的 player 上重设设备");
+        if (api_->libvlc_audio_output_set != nullptr) {
+            api_->libvlc_audio_output_set(player_, "mmdevice");
+        }
+        api_->libvlc_audio_output_device_set(player_, "mmdevice", outputDeviceId_.c_str());
+        deviceVerifyLogged_ = false;
+        deviceVerifyTick_ = GetTickCount64() + 800;
+        return;
+    }
+    AppLog::warn("VlcEngine", std::string("输出设备核对：请求=") + outputDeviceId_ + "  会话实际=" +
+                                 actual + "  ❌ 未生效（VLC 仍输出到旧设备）");
 }
 
 void VlcEngine::pause() {
@@ -484,6 +538,7 @@ void VlcEngine::setVolume(int value) {
 }
 
 void VlcEngine::pumpVolume() {
+    verifyOutputDevice();
     if (!api_ || !player_) return;
 
     const uint64_t now = GetTickCount64();

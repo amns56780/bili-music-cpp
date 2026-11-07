@@ -3602,7 +3602,33 @@ void App::drawM3Dialogs() {
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("输出设备", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         if (!outputDeviceDialogRequested_) ImGui::CloseCurrentPopup();
-        ImGui::TextUnformatted("选择音频输出设备（下一首 / 重新播放后生效）：");
+        ImGui::TextUnformatted("选择音频输出设备（切换后立即生效，会从当前位置续播）：");
+        // 每 1 秒查一次「本进程会话实际挂在哪个设备」，把真实路由显示出来（和选择项对比）
+        if (outputDeviceDialogRequested_ &&
+            GetTickCount64() - deviceInUseTick_ >= 1000) {
+            deviceInUseTick_ = GetTickCount64();
+            deviceInUseId_ = engine_.outputDeviceInUse();
+        }
+        {
+            std::string inUseName = "系统默认设备";
+            if (!deviceInUseId_.empty()) {
+                inUseName = deviceInUseId_;
+                for (const auto& device : outputDevices_) {
+                    if (device.first == deviceInUseId_) inUseName = device.second;
+                }
+            }
+            const bool matched = deviceInUseId_.empty() ? selectedOutputDeviceId_.empty()
+                                                        : deviceInUseId_ == selectedOutputDeviceId_;
+            if (deviceInUseId_.empty()) {
+                ImGui::TextDisabled("当前实际输出：还没出声（播放一首歌后这里会显示真实设备）");
+            } else {
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(matched ? Ui::Colors::Text
+                                                                         : Ui::Colors::Brand),
+                                   "当前实际输出：%s  %s", Ui::DisplayText(inUseName).c_str(),
+                                   matched ? "（已生效）" : "（未生效，正在重试）");
+            }
+        }
+        ImGui::Spacing();
         bool pendingChosen = false;
         std::string pendingDeviceId;
         ImGui::BeginChild("##output_list", ImVec2(460.0f, 240.0f), ImGuiChildFlags_Borders);
