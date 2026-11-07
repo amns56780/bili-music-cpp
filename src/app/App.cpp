@@ -781,6 +781,36 @@ void App::shareCurrentPlaylist() {
                             std::to_string(bvids.size()) + " 首");
 }
 
+void App::pushUndo(const std::string& label) {
+    // 撤销栈只在内存里，最多 20 步；整份状态每个歌单几百首也就几十 KB
+    UndoEntry entry;
+    entry.snapshot = store_.snapshot();
+    entry.label = label;
+    undoStack_.push_back(std::move(entry));
+    if (undoStack_.size() > 20) undoStack_.erase(undoStack_.begin());
+}
+
+void App::undoLastOperation() {
+    if (undoStack_.empty()) {
+        setStatus("没有可撤销的操作", true);
+        return;
+    }
+    UndoEntry entry = std::move(undoStack_.back());
+    undoStack_.pop_back();
+    if (!store_.restore(entry.snapshot)) {
+        setStatus("撤销失败：写盘出错", true);
+        return;
+    }
+    // 当前选中的歌单可能已经被撤销掉了
+    if (currentPlaylist() == nullptr && !store_.playlists().empty()) {
+        selectPlaylist(store_.playlists().front().id);
+    }
+    playlistSearchText_.clear();
+    playlistSearch_[0] = '\0';
+    setStatus("已撤销：" + entry.label);
+    AppLog::info("App", "撤销上一步：" + entry.label);
+}
+
 void App::backfillMissingCovers() {
     const StoredPlaylist* playlist = currentPlaylist();
     if (playlist == nullptr) return;
@@ -2128,6 +2158,7 @@ void App::pollAsync() {
                 setStatus("添加失败：" + (event.message.empty() ? event.bvid : event.message), true);
                 continue;
             }
+            pushUndo("添加单曲「" + event.title + "」");
             StoredSong song;
             song.bvid = event.bvid;
             song.cid = event.cid;
@@ -2349,6 +2380,7 @@ void App::handleNameDialogConfirm() {
             conflictDialogRequested_ = true;
             return;
         }
+        pushUndo("重命名歌单");
         if (store_.renamePlaylist(id, normalized)) {
             setStatus("已重命名歌单：" + normalized);
         } else {
@@ -2366,6 +2398,7 @@ void App::handleNameDialogConfirm() {
         conflictDialogRequested_ = true;
         return;
     }
+    pushUndo("新建歌单「" + normalized + "」");
     const int64_t id = store_.createPlaylist(normalized);
     selectPlaylist(id);
     setStatus("已新建歌单：" + normalized);
@@ -2385,6 +2418,7 @@ void App::handleConflictChoice(int choice) {
         choice == 0 ? conflict_.desiredTitle : conflict_.suggestedTitle;
 
     if (action == ConflictAction::Create) {
+        pushUndo("新建歌单「" + desired + "」");
         const int64_t id = choice == 0 ? store_.createPlaylistOverwriting(desired)
                                        : store_.createPlaylist(desired);
         selectPlaylist(id);
@@ -2404,6 +2438,7 @@ void App::handleConflictChoice(int choice) {
 
     if (action == ConflictAction::ImportPending) {
         if (!pendingImportedValid_) return;
+        pushUndo("导入歌单「" + desired + "」");
         std::vector<StoredSong> songs;
         songs.reserve(pendingImportedResult_.songs.size());
         for (const bili::ImportedSong& imported : pendingImportedResult_.songs) {
@@ -2430,6 +2465,7 @@ void App::handleConflictChoice(int choice) {
 
     // 导入场景
     if (!pendingImportValid_) return;
+    pushUndo("导入歌单");
     ImportContext context = pendingImport_;
     context.overwrite = choice == 0;
     if (choice == 1) context.title = conflict_.suggestedTitle;
@@ -2576,6 +2612,7 @@ void App::applyMultiAction(long long targetPlaylistId) {
     for (const StoredPlaylist& playlist : store_.playlists()) {
         if (playlist.id == targetPlaylistId) targetTitle = playlist.title;
     }
+    pushUndo(multiAction_ == 1 ? "复制曲目到歌单" : "移动曲目到歌单");
     const int count = multiAction_ == 1 ? store_.copySongsTo(targetPlaylistId, ids)
                                         : store_.moveSongsTo(targetPlaylistId, ids);
     if (multiAction_ == 2) selectedSongIds_.clear();
@@ -2599,6 +2636,7 @@ void App::chooseLocalCover() {
         setStatus("复制封面图片失败", true);
         return;
     }
+    pushUndo("更换歌单封面");
     if (store_.setPlaylistCover(playlist->id, "", wideToUtf8(destination))) {
         setStatus("已设置歌单封面（本地图片）");
     } else {
@@ -2861,17 +2899,31 @@ void App::beginDownload(long long downloadSongId) {
 }
 
 void App::scanLocalMusic() {
-    const std::wstring folder = chooseFolderW();
+    // 支持用环境变量直接指定扫描目录（自动化/自检用，省得每次点文件夹选择框）
+    std::wstring folder;
+    wchar_t envFolder[32768] = {};
+    if (GetEnvironmentVariableW(L"BILIMUSIC_SCAN_DIR", envFolder,
+                                (DWORD)(sizeof(envFolder) / sizeof(wchar_t))) > 0) {
+        folder = envFolder;
+    } else {
+        folder = chooseFolderW();
+    }
     if (folder.empty()) {
         setStatus("已取消扫描");
         return;
     }
-    setStatus("正在扫描本地音乐…");
-    std::thread([this, folder]() {
+    // 扫到的歌进「当前选中的歌单」——菜单是每个歌单自己的，
+    // 以前无脑写进「本地音乐」，在别的歌单里点扫描就会觉得"一首都没进来"。
+    const StoredPlaylist* target = currentPlaylist();
+    const long long targetId = target != nullptr ? target->id : -1;
+    const std::string targetTitle = target != nullptr ? target->title : std::string("本地音乐");
+    setStatus("正在扫描本地音乐（→ " + targetTitle + "）…");
+    std::thread([this, folder, targetId]() {
         std::vector<std::string> files = scanAudioFiles(folder);
         AsyncEvent event;
         event.kind = AsyncEvent::Kind::LocalScanDone;
         event.ok = true;
+        event.songId = targetId;  // 复用为「目标歌单 id」
         event.localPaths = std::move(files);
         postAsync(std::move(event));
     }).detach();
@@ -2882,19 +2934,21 @@ void App::finishLocalScan(const AsyncEvent& event) {
         setStatus("扫描失败", true);
         return;
     }
-    int64_t playlistId = -1;
-    if (const StoredPlaylist* existing = store_.findBySource("LOCAL", "本地音乐")) {
-        playlistId = existing->id;
-    } else {
-        for (const StoredPlaylist& playlist : store_.playlists()) {
-            if (playlist.title == "本地音乐") {
-                playlistId = playlist.id;
-                break;
+    int64_t playlistId = event.songId;
+    if (playlistId < 0) {
+        if (const StoredPlaylist* existing = store_.findBySource("LOCAL", "本地音乐")) {
+            playlistId = existing->id;
+        } else {
+            for (const StoredPlaylist& playlist : store_.playlists()) {
+                if (playlist.title == "本地音乐") {
+                    playlistId = playlist.id;
+                    break;
+                }
             }
         }
-    }
-    if (playlistId < 0) {
-        playlistId = store_.createPlaylist("本地音乐", "LOCAL", "本地音乐");
+        if (playlistId < 0) {
+            playlistId = store_.createPlaylist("本地音乐", "LOCAL", "本地音乐");
+        }
     }
     std::vector<StoredSong> songs;
     songs.reserve(event.localPaths.size());
@@ -2906,10 +2960,18 @@ void App::finishLocalScan(const AsyncEvent& event) {
         song.localPath = path;
         songs.push_back(std::move(song));
     }
+    pushUndo("扫描本地音乐");
     const int added = store_.addSongs(playlistId, songs);
     selectPlaylist(playlistId);
+    std::string targetName = "本地音乐";
+    for (const StoredPlaylist& playlist : store_.playlists()) {
+        if (playlist.id == playlistId) {
+            targetName = playlist.title;
+            break;
+        }
+    }
     setStatus("扫描完成：发现 " + std::to_string(event.localPaths.size()) + " 个音频文件，新增 " +
-              std::to_string(added) + " 首");
+              std::to_string(added) + " 首到「" + targetName + "」");
     AppLog::info("App", "本地音乐扫描：文件 " + std::to_string(event.localPaths.size()) +
                             "，新增 " + std::to_string(added));
 }
@@ -2992,7 +3054,8 @@ void App::drawM3Dialogs() {
         ImGui::TextWrapped("删除歌单「%s」及其中 %d 首曲目？此操作不可恢复。", title.c_str(), count);
         ImGui::Spacing();
         if (ImGui::Button("删除", ImVec2(110.0f, 32.0f))) {
-            if (store_.deletePlaylist(deletePlaylistId_)) {
+            pushUndo("删除歌单");
+    if (store_.deletePlaylist(deletePlaylistId_)) {
                 if (selectedPlaylistId_ == deletePlaylistId_) {
                     selectedPlaylistId_ =
                         store_.playlists().empty() ? -1 : store_.playlists().front().id;
@@ -3198,7 +3261,8 @@ void App::drawM3Dialogs() {
         ImGui::Spacing();
         if (ImGui::Button("删除", ImVec2(110.0f, 32.0f))) {
             const std::vector<int64_t> ids(selectedSongIds_.begin(), selectedSongIds_.end());
-            const int removed = store_.removeSongs(ids);
+            pushUndo("删除曲目");
+    const int removed = store_.removeSongs(ids);
             selectedSongIds_.clear();
             setStatus("已删除 " + std::to_string(removed) + " 首曲目");
             deleteSongsDialogRequested_ = false;
@@ -3313,6 +3377,7 @@ void App::drawM3Dialogs() {
             if (applySongId >= 0) {
                 for (const StoredSong* song : coverSongs) {
                     if (song->id != applySongId) continue;
+                    pushUndo("更换歌单封面");
                     if (store_.setPlaylistCover(playlist->id, song->coverUrl, "")) {
                         setStatus("已设置歌单封面（来自歌单视频）");
                     }
@@ -3912,6 +3977,11 @@ void App::draw() {
     // 窗口内快捷键：空格 = 播放/暂停，←/→（或 [ ]）= 切歌，F11 = 全屏
     if (!immersiveOpen_ && ImGui::IsKeyPressed(ImGuiKey_F11, false)) toggleImmersiveFullscreen();
     if (!immersiveOpen_ && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) toggleSidebar();
+    // Ctrl+Z 撤销上一步（正在输入文字时让给输入框自己的撤销）
+    if (!immersiveOpen_ && io.KeyCtrl && !io.WantTextInput &&
+        ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        undoLastOperation();
+    }
     if (!immersiveOpen_ && !io.WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) togglePlayback();
         // [ / ] 切歌；← / → 快退/快进 3 秒

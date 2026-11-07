@@ -565,6 +565,23 @@ bool LibraryStore::setSongLocalPath(int64_t songId, const std::string& localPath
     return false;
 }
 
+LibraryStore::Snapshot LibraryStore::snapshot() const {
+    Snapshot snap;
+    snap.playlists = playlists_;
+    snap.songs = songs_;
+    snap.nextPlaylistId = nextPlaylistId_;
+    snap.nextSongId = nextSongId_;
+    return snap;
+}
+
+bool LibraryStore::restore(const Snapshot& snap) {
+    playlists_ = snap.playlists;
+    songs_ = snap.songs;
+    nextPlaylistId_ = snap.nextPlaylistId;
+    nextSongId_ = snap.nextSongId;
+    return save(nullptr);
+}
+
 bool LibraryStore::setSongCover(int64_t songId, const std::string& coverUrl) {
     for (StoredSong& song : songs_) {
         if (song.id != songId) continue;

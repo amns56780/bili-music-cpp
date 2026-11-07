@@ -192,6 +192,9 @@ private:
     void shareCurrentPlaylist();
     // 补全当前歌单里缺失的视频封面（老版本导入的歌单没有 coverUrl）
     void backfillMissingCovers();
+    // 撤销：每个会改库的操作前打一份快照（最多 20 步），Ctrl+Z 回退上一步
+    void pushUndo(const std::string& label);
+    void undoLastOperation();
     void prefetchNextSong();
     // 整首缓存（激进缓存）：后台下载完整音频到 ~/.bilimusic/cache，播本地文件实现秒 seek
     void startCacheDownload(long long songId, const std::string& bvid, long long cid,
@@ -379,6 +382,12 @@ private:
     // 输出设备弹窗里的「实际输出」缓存（每秒刷一次，避免每帧枚举 WASAPI 会话）
     std::string deviceInUseId_;
     uint64_t deviceInUseTick_ = 0;
+    // 撤销栈（快照 + 操作名）
+    struct UndoEntry {
+        LibraryStore::Snapshot snapshot;
+        std::string label;
+    };
+    std::vector<UndoEntry> undoStack_;
     // 自动整首缓存（含预取下一首），写入 audio.full_cache，默认开启
     bool fullCacheEnabled_ = true;
     // 侧栏底部入口（本地音乐/输出设备/播放缓存/导入歌单）折叠状态

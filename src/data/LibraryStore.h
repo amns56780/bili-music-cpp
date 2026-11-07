@@ -85,6 +85,17 @@ public:
     bool setSongLocalPath(int64_t songId, const std::string& localPath);
     bool setSongCover(int64_t songId, const std::string& coverUrl);
 
+    // ---------------- 撤销（快照） ----------------
+    // 记录整份内存状态；撤销时整份还原并落盘。结构很小（几百首歌），直接拷贝最省事也最可靠。
+    struct Snapshot {
+        std::vector<StoredPlaylist> playlists;
+        std::vector<StoredSong> songs;
+        int64_t nextPlaylistId = 1;
+        int64_t nextSongId = 1;
+    };
+    Snapshot snapshot() const;
+    bool restore(const Snapshot& snapshot);
+
     static std::wstring dataDir();
     static std::wstring playlistsFile();
 
