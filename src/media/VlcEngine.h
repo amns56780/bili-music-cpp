@@ -48,8 +48,16 @@ public:
     }
     std::string audioOutputDevice() const { return outputDeviceId_; }
     void applyOutputDevice();  // 对当前播放器应用已选设备
+    // 按设备重建整个 libvlc 实例（--mmdevice-audio-device / --aout=mmdevice）：
+    // VLC 3 的 aout 在"起播前设设备"之外的场景会忽略设置，重建实例是唯一确定生效的路子。
+    // 会先释放当前播放器，调用方需要重新起播。
+    bool switchAudioDevice(const std::string& id);
     // 本进程音频会话实际挂在哪个设备上（空串 = 还没出声）
     std::string outputDeviceInUse() { return appVolume_.findSessionDeviceId(); }
+    // 目标设备是否已经确认生效过（起播后校验通过）
+    bool outputDeviceConfirmed() const {
+        return !outputDeviceId_.empty() && confirmedDeviceId_ == outputDeviceId_;
+    }
 
     void togglePause();
     void resumeByPlay();  // 用 libvlc_media_player_play 恢复（自检对比用）
@@ -72,6 +80,8 @@ public:
 
 private:
     void releasePlayer();
+    bool createInstance(std::string* error);
+    void applyDeviceMediaOptions();  // 把设备写进 media 选项（aout 会继承）
 
     void* library_ = nullptr;                 // HMODULE
     void* instance_ = nullptr;                // libvlc_instance_t*
@@ -104,6 +114,9 @@ private:
     uint64_t deviceVerifyTick_ = 0;
     bool deviceVerifyLogged_ = false;
     int deviceVerifyAttempts_ = 0;
+    uint64_t deviceWatchUntil_ = 0;   // 切换后 12 秒内每秒采样一次真实会话设备
+    uint64_t deviceWatchNextTick_ = 0;
+    std::string deviceWatchLast_;
     // 已经确认生效过的设备 id：确认过就不再每首歌重复核对（避免每次起播都动一下 aout）
     std::string confirmedDeviceId_;
 };

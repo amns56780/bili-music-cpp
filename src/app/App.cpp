@@ -339,7 +339,13 @@ void App::init(GLFWwindow* window) {
         setStatus("VLC 内核加载失败：" + engineError, true);
     }
     selectedOutputDeviceId_ = bili_.getSetting("audio.outputDevice");
-    if (!selectedOutputDeviceId_.empty()) engine_.setAudioOutputDevice(selectedOutputDeviceId_);
+    if (!selectedOutputDeviceId_.empty()) {
+        // 关键：实例必须「带着 --mmdevice-audio-device 创建」，aout 建出来才会用指定设备。
+        // 建成之后再 setAudioOutputDevice 是无效的（VLC 3 只在 aout 创建时读设备）。
+        if (!engine_.switchAudioDevice(selectedOutputDeviceId_)) {
+            AppLog::warn("App", "启动时按已保存设备重建 VLC 实例失败");
+        }
+    }
 
     // 旧版本 httpGet 有 8 MiB 上限，超过这个体积的整首缓存只存了前一半（播一半就切歌）。
     // 升级后一次性清掉这些可疑缓存，让它们按新上限重新缓存。
@@ -1224,15 +1230,26 @@ void App::refreshOutputDevices() {
 
 void App::applyOutputDevice(const std::string& id) {
     selectedOutputDeviceId_ = id;
-    engine_.setAudioOutputDevice(id);
-    engine_.applyOutputDevice();
     bili_.setSetting("audio.outputDevice", id);
-    // VLC 3 只在媒体启动时读输出设备，播放中设置不会生效 —— 必须重载当前媒体并回到原位置
-    if (hasMedia_ && playingSongId_ >= 0) {
-        const double resumeAt = positionMs_;
-        if (reloadCurrentMediaAt(resumeAt, true)) {
-            AppLog::info("App", "切换输出设备后重载媒体，回到 " + std::to_string((int)resumeAt) + "ms");
-        }
+    // VLC 3 对「播放中换设备」不可靠：aout 只在创建时读设备，运行中设置基本被忽略。
+    // 这里直接按新设备重建整个 libvlc 实例（--mmdevice-audio-device），再回到原进度重新起播，
+    // 保证声音真的换到新设备，而不是只在界面上显示换了。
+    // 实测结论：同一进程里一旦建过 aout，后续换设备（无论 device_set 还是 media 选项）都会被 VLC 忽略，
+    // 只有「按新设备重建 libvlc 实例 + 重新起播」能真正换过去。
+    const bool wasPlayingTrack = playingSongId_ >= 0;
+    const double resumeAt = wasPlayingTrack && hasMedia_ ? positionMs_ : -1.0;
+    deviceInUseId_.clear();
+    deviceInUseTick_ = 0;
+    if (!engine_.switchAudioDevice(id)) {
+        setStatus("切换输出设备失败（VLC 实例重建失败）", true);
+        return;
+    }
+    if (wasPlayingTrack) {
+        // 走正常的起播路径，保证新的 aout 一定被创建出来
+        pendingSeekMs_ = resumeAt >= 0.0 ? resumeAt : -1.0;
+        startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
+        AppLog::info("App", "切换输出设备后重建实例并重新起播，回到 " +
+                                std::to_string((int)(resumeAt >= 0.0 ? resumeAt : 0.0)) + "ms");
     }
     std::string name = "默认设备";
     for (const auto& device : outputDevices_) {
@@ -3605,7 +3622,7 @@ void App::drawM3Dialogs() {
         ImGui::TextUnformatted("选择音频输出设备（切换后立即生效，会从当前位置续播）：");
         // 每 1 秒查一次「本进程会话实际挂在哪个设备」，把真实路由显示出来（和选择项对比）
         if (outputDeviceDialogRequested_ &&
-            GetTickCount64() - deviceInUseTick_ >= 1000) {
+            GetTickCount64() - deviceInUseTick_ >= 500) {
             deviceInUseTick_ = GetTickCount64();
             deviceInUseId_ = engine_.outputDeviceInUse();
         }
@@ -3617,9 +3634,11 @@ void App::drawM3Dialogs() {
                     if (device.first == deviceInUseId_) inUseName = device.second;
                 }
             }
-            const bool matched = deviceInUseId_.empty() ? selectedOutputDeviceId_.empty()
-                                                        : deviceInUseId_ == selectedOutputDeviceId_;
-            if (deviceInUseId_.empty()) {
+            const bool matched = selectedOutputDeviceId_.empty()
+                                     ? deviceInUseId_.empty()
+                                     : (engine_.outputDeviceConfirmed() ||
+                                        deviceInUseId_ == selectedOutputDeviceId_);
+            if (deviceInUseId_.empty() && !engine_.outputDeviceConfirmed()) {
                 ImGui::TextDisabled("当前实际输出：还没出声（播放一首歌后这里会显示真实设备）");
             } else {
                 ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(matched ? Ui::Colors::Text

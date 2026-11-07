@@ -130,8 +130,9 @@ std::string AppVolume::findSessionDeviceId() {
     UINT deviceCount = 0;
     collection->GetCount(&deviceCount);
     const DWORD currentPid = GetCurrentProcessId();
-    std::string found;
-    for (UINT d = 0; d < deviceCount && found.empty(); ++d) {
+    std::string foundActive;
+    std::string foundInactive;
+    for (UINT d = 0; d < deviceCount && foundActive.empty(); ++d) {
         IMMDevice* device = nullptr;
         if (FAILED(collection->Item(d, &device)) || device == nullptr) continue;
         IAudioSessionManager2* manager = nullptr;
@@ -142,7 +143,7 @@ std::string AppVolume::findSessionDeviceId() {
             if (SUCCEEDED(manager->GetSessionEnumerator(&sessions)) && sessions != nullptr) {
                 int sessionCount = 0;
                 sessions->GetCount(&sessionCount);
-                for (int s = 0; s < sessionCount && found.empty(); ++s) {
+                for (int s = 0; s < sessionCount; ++s) {
                     IAudioSessionControl* control = nullptr;
                     if (FAILED(sessions->GetSession(s, &control)) || control == nullptr) continue;
                     IAudioSessionControl2* control2 = nullptr;
@@ -151,11 +152,20 @@ std::string AppVolume::findSessionDeviceId() {
                         control2 != nullptr) {
                         DWORD pid = 0;
                         control2->GetProcessId(&pid);
-                        if (pid == currentPid) {
+                        AudioSessionState state = AudioSessionStateExpired;
+                        control2->GetState(&state);
+                        // 过期会话会残留在旧设备上 —— 必须排除，否则会把"旧设备"误判成当前设备。
+                        // 同时优先认 Active（真正在出声）的会话，Inactive 只做兜底。
+                        if (pid == currentPid && state != AudioSessionStateExpired) {
                             LPWSTR id = nullptr;
                             if (SUCCEEDED(device->GetId(&id)) && id != nullptr) {
-                                found = wideToUtf8Local(id);
+                                const std::string deviceId = wideToUtf8Local(id);
                                 CoTaskMemFree(id);
+                                if (state == AudioSessionStateActive) {
+                                    if (foundActive.empty()) foundActive = deviceId;
+                                } else if (foundInactive.empty()) {
+                                    foundInactive = deviceId;
+                                }
                             }
                         }
                         control2->Release();
@@ -169,7 +179,7 @@ std::string AppVolume::findSessionDeviceId() {
         device->Release();
     }
     collection->Release();
-    return found;
+    return foundActive.empty() ? foundInactive : foundActive;
 }
 
 bool AppVolume::ensureSession() {

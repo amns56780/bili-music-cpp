@@ -234,19 +234,11 @@ bool VlcEngine::init(std::string* error) {
         (char* (*)(void*))GetProcAddress((HMODULE)module, "libvlc_audio_output_device_get");
     if (!ok) { delete api; return false; }
 
-    // 和 Java 版一致：不做视频、安静启动、只播音频
-    // 自检时可以用 BILIMUSIC_VLC_VERBOSE=1 打开 VLC 日志（排查暂停/恢复、aout 重建）
-    std::vector<const char*> args = {"--no-video", "--quiet", "--intf=dummy", "--aout=mmdevice"};
-    if (std::getenv("BILIMUSIC_VLC_VERBOSE") != nullptr) {
-        args = {"--no-video", "--verbose=2", "--intf=dummy"};
-    }
-    instance_ = api->libvlc_new((int)args.size(), args.data());
-    if (!instance_) {
+    api_ = api;
+    if (!createInstance(error)) {
         delete api;
-        appendError(error, "libvlc_new 失败（VLC 内核无法初始化）");
         return false;
     }
-    api_ = api;
     AppLog::info("VlcEngine", "VLC " + version() + "，内核目录 " + wideToUtf8(libraryDir_));
 
     // 优先使用 WASAPI 应用级音量：不经过 VLC，拖动音量条立即生效
@@ -257,6 +249,64 @@ bool VlcEngine::init(std::string* error) {
         sessionVolumeEnabled_ = false;
         AppLog::info("VlcEngine", "WASAPI 不可用，音量回退到 libvlc");
     }
+    return true;
+}
+
+void VlcEngine::applyDeviceMediaOptions() {
+    // VLC 3 的 aout 只在自己被创建时读设备；而 aout 建在 input 之下，
+    // 会继承媒体项上的选项 —— 这是唯一能在"每次起播"都稳定生效的地方。
+    if (media_ == nullptr || api_ == nullptr) return;
+    if (outputDeviceId_.empty()) return;
+    api_->libvlc_media_add_option(media_, ":aout=mmdevice");
+    api_->libvlc_media_add_option(media_,
+                                  (":" + std::string("mmdevice-audio-device=") + outputDeviceId_).c_str());
+}
+
+bool VlcEngine::createInstance(std::string* error) {
+    // 和 Java 版一致：不做视频、安静启动、只播音频
+    // 自检时可以用 BILIMUSIC_VLC_VERBOSE=1 打开 VLC 日志（排查暂停/恢复、aout 重建）
+    std::vector<std::string> argStore;
+    const bool verbose = std::getenv("BILIMUSIC_VLC_VERBOSE") != nullptr;
+    argStore.push_back("--no-video");
+    argStore.push_back(verbose ? "--verbose=2" : "--quiet");
+    argStore.push_back("--intf=dummy");
+    argStore.push_back("--aout=mmdevice");
+    if (!outputDeviceId_.empty()) {
+        // 这一条必须落在实例级：aout 创建时直接读它，不依赖"起播前设设备"的时机
+        argStore.push_back("--mmdevice-audio-device=" + outputDeviceId_);
+    }
+    std::vector<const char*> args;
+    args.reserve(argStore.size());
+    for (const std::string& item : argStore) args.push_back(item.c_str());
+    instance_ = api_->libvlc_new((int)args.size(), args.data());
+    if (instance_ == nullptr) {
+        if (error != nullptr) *error = "libvlc_new 失败（VLC 内核无法初始化）";
+        return false;
+    }
+    return true;
+}
+
+bool VlcEngine::switchAudioDevice(const std::string& id) {
+    if (api_ == nullptr) return false;
+    releasePlayer();
+    if (instance_ != nullptr) {
+        api_->libvlc_release(instance_);
+        instance_ = nullptr;
+    }
+    outputDeviceId_ = id;
+    confirmedDeviceId_.clear();
+    deviceVerifyLogged_ = false;
+    deviceVerifyTick_ = 0;
+    deviceWatchUntil_ = GetTickCount64() + 12000;
+    deviceWatchNextTick_ = 0;
+    deviceWatchLast_.clear();
+    std::string error;
+    if (!createInstance(&error)) {
+        AppLog::warn("VlcEngine", "按设备重建 VLC 实例失败：" + error);
+        return false;
+    }
+    AppLog::info("VlcEngine", "已按设备重建 VLC 实例：" +
+                                  (id.empty() ? std::string("系统默认设备") : id));
     return true;
 }
 
@@ -299,6 +349,7 @@ bool VlcEngine::playPath(const std::wstring& path, std::string* error) {
     }
     releasePlayer();
     media_ = api_->libvlc_media_new_path(instance_, wideToUtf8(path).c_str());
+    applyDeviceMediaOptions();
     if (!media_) {
         appendError(error, "无法打开文件：" + wideToUtf8(path));
         return false;
@@ -347,6 +398,7 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
     }
     if (!userAgent.empty()) {
         api_->libvlc_media_add_option(media_, (":" + std::string("http-user-agent=") + userAgent).c_str());
+    applyDeviceMediaOptions();
     }
     player_ = api_->libvlc_media_player_new_from_media(media_);
     if (!player_) {
@@ -429,12 +481,25 @@ void VlcEngine::applyOutputDevice() {
     }
     api_->libvlc_audio_output_device_set(player_, "mmdevice", outputDeviceId_.c_str());
     if (confirmedDeviceId_ == outputDeviceId_) return;  // 这台设备已经确认生效，不必每首重新核对
-    deviceVerifyTick_ = GetTickCount64() + 600;  // 起播后 600ms 回读一次，确认真的切过去了
+    deviceVerifyTick_ = GetTickCount64() + 2500;  // 起播后 2.5s 回读（aout 建好、真的出声之后）
     deviceVerifyLogged_ = false;
     deviceVerifyAttempts_ = 0;
 }
 
 void VlcEngine::verifyOutputDevice() {
+    // 切换设备后持续观察 12 秒：aout 重建需要一点时间，早期的采样可能还停在旧设备上。
+    // 只有最终稳定落在目标设备才算真的生效。
+    if (deviceWatchUntil_ != 0 && GetTickCount64() < deviceWatchUntil_) {
+        if (GetTickCount64() >= deviceWatchNextTick_) {
+            deviceWatchNextTick_ = GetTickCount64() + 1000;
+            const std::string actual = appVolume_.findSessionDeviceId();
+            if (!actual.empty() && actual != deviceWatchLast_) {
+                deviceWatchLast_ = actual;
+                AppLog::info("VlcEngine", "设备观察：会话现在挂 " + actual +
+                                              (actual == outputDeviceId_ ? "（目标）" : "（还没切过去）"));
+            }
+        }
+    }
     // VLC 3.0 没有「回读当前设备」的 API（libvlc_audio_output_device_get 是 4.0 的），
     // 所以这里改成看 WASAPI：本进程的音频会话实际挂在哪个 render endpoint 上。
     if (deviceVerifyLogged_) return;
