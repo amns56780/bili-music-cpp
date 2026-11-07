@@ -1,4 +1,4 @@
-# bilimusic · C++ 桌面版 v1.0.10
+# bilimusic · C++ 桌面版 v1.1.0
 
 > 这是 [bilimusic](https://github.com/amns56780/bili-music) 桌面端的 **C++ 重写版**，目前是本机日常使用的版本。
 > 原来的 Kotlin / Compose 版本继续维护、不受影响；这里是并行的原生实现，两者共用同一份用户数据。
@@ -11,7 +11,7 @@
 
 ## 当前状态
 
-**M1–M5 全部完成，版本 v1.0.10，可日常使用。**
+**M1–M5 全部完成，版本 v1.1.0，可日常使用。**
 
 | 里程碑 | 内容 | 状态 |
 | --- | --- | --- |
@@ -66,6 +66,15 @@
 - 内置 VLC（`libvlc` + `libvlccore` + 369 个 plugins，约 135MB）
 - 免安装 zip（60.6MB）+ NSIS 安装向导（32.1MB，Modern UI 2 简体中文，按用户安装免 UAC，可选桌面快捷方式，注册卸载项）
 - 实测：启动 **0.66–0.81s**、Working Set **215–241MB**、exe **5.65MB**
+
+## 版本号规则
+
+`major.minor.patch`，**逢十进一**：patch 走到 9 之后进位到 minor（`1.1.9 → 1.2.0`），minor 到 9 之后进位到 major。
+单一来源是 `CMakeLists.txt` 里的 `project(bilimusic_cpp VERSION x.y.z)`，安装包、exe 资源、关于页都从它取值。
+
+## v1.1.0（= 原 v1.0.10，同一份内容，改为逢十进一编号）
+
+- 修复输出设备切换无效（见下）
 
 ## v1.0.10 修复（输出设备切换无效）
 
