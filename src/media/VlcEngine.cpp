@@ -370,6 +370,7 @@ bool VlcEngine::playPath(const std::wstring& path, std::string* error) {
     volumeApplied_ = false;
     lastVlcVolume_ = -1;
     volumeDirty_ = true;
+    appVolume_.resetRetryThrottle();
     pumpVolume();
     return true;
 }
@@ -415,6 +416,7 @@ bool VlcEngine::playUrl(const std::string& url, const std::string& referrer,
     volumeApplied_ = false;
     lastVlcVolume_ = -1;
     volumeDirty_ = true;
+    appVolume_.resetRetryThrottle();
     pumpVolume();
     return true;
 }
@@ -606,21 +608,18 @@ void VlcEngine::pumpVolume() {
     verifyOutputDevice();
     if (!api_ || !player_) return;
 
-    const uint64_t now = GetTickCount64();
-    if (!volumeDirty_ && volumeApplied_ && now - volumeCheckTick_ < 250) return;
-    volumeCheckTick_ = now;
-
     if (sessionVolumeEnabled_) {
         // 只用 WASAPI 应用级音量；会话正在重建（换曲/恢复）时**不要**回退去写 VLC 音量，
         // 否则会在 100%（WASAPI）和 cbrt(80)≈43（VLC）之间来回跳，听感就是「一炸一炸」。
         if (!appVolume_.refresh() || !appVolume_.available()) return;
-        const int current = appVolume_.volume();
-        if (!volumeApplied_ || volumeDirty_ || current != volume_) {
-            // 换曲后新的音频会话音量默认是 100%：这里必须强制写回用户音量，
-            // 否则下一首会以系统默认音量播放，直到用户拖一下音量条才恢复。
-            const bool reapplying = !volumeApplied_;
-            if (!appVolume_.setVolume(volume_, /*force=*/true)) return;
-            if (reapplying) {
+        // 每帧都读回真实会话音量，只有不一致时才写（写动作本身才会产生可闻跳变）。
+        // 旧实现每 250ms 才检查一次：换曲后系统把会话音量重置回 100% 时，
+        // 最长会有 250ms 的「突然变响」——用户听到的换曲炸音就是它。
+        const int before = appVolume_.volume();
+        const bool forced = !volumeApplied_ || volumeDirty_;
+        if (!appVolume_.setVolume(volume_, forced)) return;
+        if (forced) {
+            if (!volumeApplied_) {
                 AppLog::info("AppVolume", "换曲后重新写入应用级音量 -> " +
                                               std::to_string(volume_) + "%");
             }
@@ -630,8 +629,9 @@ void VlcEngine::pumpVolume() {
             }
             volumeApplied_ = true;
             volumeDirty_ = false;
-        } else {
-            volumeDirty_ = false;
+        } else if (before >= 0 && (before - volume_ > 1 || volume_ - before > 1)) {
+            AppLog::info("AppVolume", "会话音量被重置为 " + std::to_string(before) + "%（应为 " +
+                                          std::to_string(volume_) + "%），已纠正");
         }
         return;
     }
@@ -640,7 +640,11 @@ void VlcEngine::pumpVolume() {
     //   VLC 的音量是立方响应，直接给百分比听感不对，反推 vlcVolume = 100 * cbrt(volume/100)
     int vlcVolume = (int)std::lround(100.0 * std::cbrt((double)volume_ / 100.0));
     vlcVolume = vlcVolume < 0 ? 0 : (vlcVolume > 100 ? 100 : vlcVolume);
-    if (!volumeApplied_ || volumeDirty_ || lastVlcVolume_ != vlcVolume) {
+    const int actual = (api_->libvlc_audio_get_volume != nullptr)
+                           ? api_->libvlc_audio_get_volume(player_)
+                           : -1;
+    if (!volumeApplied_ || volumeDirty_ || lastVlcVolume_ != vlcVolume ||
+        (actual >= 0 && actual != vlcVolume)) {
         api_->libvlc_audio_set_volume(player_, vlcVolume);
         lastVlcVolume_ = vlcVolume;
         volumeApplied_ = true;

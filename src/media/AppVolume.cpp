@@ -190,9 +190,10 @@ bool AppVolume::ensureSession() {
     // 这里清掉旧的缓存值，保证下面 setVolume 一定会把用户音量重新写进去。
     lastVolume_ = -1;
 
-    // 会话在第一次出声之后才创建：限频重试，别每一帧都枚举一遍
+    // 会话在第一次出声之后才创建：限频重试，别每一帧都枚举一遍。
+    // 100ms 足够让换曲后新会话在 1~2 帧内被接管（旧值 500ms 会让换曲炸音持续半秒）。
     const uint64_t now = GetTickCount64();
-    if (lastRetryTick_ != 0 && now - lastRetryTick_ < 500) return false;
+    if (lastRetryTick_ != 0 && now - lastRetryTick_ < 100) return false;
     lastRetryTick_ = now;
 
     IAudioSessionEnumerator* sessions = nullptr;
@@ -263,9 +264,18 @@ int AppVolume::levelToUi(float level) {
 bool AppVolume::setVolume(int percent, bool force) {
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
     if (!ensureSession()) return false;
-    if (!force && lastVolume_ == clamped) return true;
-    const float level = uiToLevel(clamped);
-    if (FAILED(sessionVolume_->SetMasterVolume(level, nullptr))) return false;
+    const float target = uiToLevel(clamped);
+    if (!force) {
+        // 读回真实电平而不是只比缓存：系统在换曲 / 会话重建时可能把音量改回 100%，
+        // 必须按真实值判断，否则会漏掉这种“被外部改掉”的情况。
+        float level = 0.0f;
+        if (SUCCEEDED(sessionVolume_->GetMasterVolume(&level)) &&
+            std::fabs(level - target) < 0.0002f) {
+            lastVolume_ = clamped;
+            return true;
+        }
+    }
+    if (FAILED(sessionVolume_->SetMasterVolume(target, nullptr))) return false;
     if (lastVolume_ != clamped) {
         AppLog::info("AppVolume", "应用级音量 -> " + std::to_string(clamped) + "%");
     }

@@ -1,6 +1,6 @@
 # bilimusic · C++ 桌面版 —— AI 交接文档
 
-> 生成时间：2026-11-08 ｜ 当前版本：**v1.1.3**
+> 生成时间：2026-11-08 ｜ 当前版本：**v1.1.4**
 > 交接范围：F:/BiliMusic 下的 cpp/（主用，本机日常播放器）与 source/（Kotlin/Compose 桌面 + Android，参考实现）
 > 姊妹文档：source/HANDOVER-AI.md（Java/Kotlin 版交接，含两端共用数据与分享码契约）
 > 迁移记录：项目根目录 2026-11-08 从 C 盘迁到 **F:/BiliMusic**，清理与验证见 ../MIGRATION-2026-11-08.md（本文内路径已同步更新）
@@ -151,6 +151,7 @@ LibraryStore::save() 写 C:/Users/amns2333/.bilimusic/playlists.json，**与 Jav
 | v1.0.10 -> v1.1.0 | 输出设备（第一版）+ 编号进位 | 钉 mmdevice + 起播后重设 + 弹窗显示实际输出；版本号改逢十进一 |
 | v1.1.1 | **输出设备真修复** | 进程内换设备无效 -> 按 --mmdevice-audio-device **重建 libvlc 实例**；启动先重建再起播；WASAPI 会话核对 |
 | v1.1.3 | **撤销 + 扫描目标** | LibraryStore::Snapshot 整份快照 20 步 + Ctrl+Z；扫描本地音乐进「当前选中歌单」 |
+| v1.1.4 | **换曲炸音** | 会话音量被系统重置回 100% 后，旧逻辑要等 250ms 才纠回；改为每帧回读、只在不一致时写 |
 
 注：v1.0.10 与 v1.1.0 是同一份二进制，仅编号进位，v1.0.10 的 release 与 tag 已删除。v1.1.2 的包打出后用户又提了撤销需求，合并进 v1.1.3 一起发。
 
@@ -235,7 +236,7 @@ sourceType 语义：FAV（收藏夹）/ TOVIEW（稍后再看）/ UPLOAD（UP主
 
 - 安装目录 D:/bilimusic（NSIS 按用户安装，375 个文件，exe 约 6.1 MB + vlc 约 135 MB）。
 - 单实例；关窗口默认进托盘，托盘菜单可退出。
-- 最近一次安装：v1.1.3，启动日志「bilimusic v1.1.3 启动」。
+- 最近一次安装：v1.1.4，启动日志「bilimusic v1.1.4 启动」。
 
 ---
 
@@ -248,6 +249,7 @@ sourceType 语义：FAV（收藏夹）/ TOVIEW（稍后再看）/ UPLOAD（UP主
     grep -a "输出设备核对|设备观察|已按设备重建"           # 输出设备
     grep -a "本地音乐扫描|添加单曲到歌单|撤销上一步"        # 数据操作
     grep -a "缓存不完整|播放提前结束"                      # 缓存损坏兜底
+    grep -a "换曲后重新写入应用级音量|会话音量被重置为"      # 音量：换曲写入 / 被系统重置后纠正
 
 ### 9.2 环境变量开关
 
@@ -264,6 +266,7 @@ sourceType 语义：FAV（收藏夹）/ TOVIEW（稍后再看）/ UPLOAD（UP主
 | sharelink_test.cpp/.exe | 分享码编解码（bm://pl/v1/...），支持 zlib 与 raw |
 | mkjava_link_exact.py / mkdup_link.py | 用 Python 复刻 Java 端 zlib 编码，造测试链接 |
 | devicetest.cpp/.exe | 直接驱动 VlcEngine 验证输出设备切换（打印 WASAPI 会话所在设备） |
+| sessprobe.cpp/.exe | 观察换曲时 WASAPI 会话的音量/状态/峰值；可强制把会话改成 1.0 量测 pumpVolume 纠正延迟。启动即静音默认端点，`sessprobe.exe unmute` 恢复 |
 | shot3.ps1 | 置顶 + 截图 + 点击（-clickX -clickY，注意 32px 偏差） |
 | dbl2.ps1 | 双击指定坐标 |
 

@@ -103,11 +103,10 @@ private:
     bool sessionVolumeEnabled_ = false;
     int volume_ = 80;
 
-    // 音量写出节流：每帧写 WASAPI / VLC 音量会听到「一炸一炸」的杂音，
-    // 只在音量真的变化 / 刚起播 / 会话重建时写，其余时间 250ms 检查一次会话状态。
+    // 音量：每帧读回会话 / VLC 的真实音量，只有真的不一致时才写（写才会产生可闻跳变）。
+    // 旧版每 250ms 才检查一次，换曲后系统把会话音量重置回 100% 时会有最长 250ms 的炸音。
     bool volumeDirty_ = true;
     bool volumeApplied_ = false;
-    uint64_t volumeCheckTick_ = 0;
     int lastVlcVolume_ = -1;
     // 切换输出设备后回读校验（确认 VLC 真的换了，而不是只在界面上显示换了）
     void verifyOutputDevice();

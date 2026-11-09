@@ -40,6 +40,9 @@ public:
     // 会话失效（VLC 重建音频输出）时重新绑定；返回当前是否可用
     bool refresh();
 
+    // 换曲 / 起播时清掉重试节流，让首次绑定不必等 100ms
+    void resetRetryThrottle() { lastRetryTick_ = 0; }
+
     // 扫所有活动渲染端点，找出本进程音频会话实际挂在哪个设备上（返回 endpoint id，找不到返回空串）
     // 用途：切换输出设备后验证「真的换了路由」，而不只是界面上显示换了
     std::string findSessionDeviceId();
