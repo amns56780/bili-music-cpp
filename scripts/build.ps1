@@ -12,9 +12,9 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 
 $kit = $env:W64DEVKIT
-if (-not $kit) { $kit = 'C:\Users\amns2333\BiliMusic\tools\w64devkit' }
+if (-not $kit) { $kit = 'F:\BiliMusic\tools\w64devkit' }
 $cmakeDir = $env:CMAKE_DIR
-if (-not $cmakeDir) { $cmakeDir = 'C:\Users\amns2333\BiliMusic\tools\cmake' }
+if (-not $cmakeDir) { $cmakeDir = 'F:\BiliMusic\tools\cmake' }
 $cmake = Join-Path $cmakeDir 'bin\cmake.exe'
 
 if (-not (Test-Path (Join-Path $kit 'bin\g++.exe'))) { throw ('MinGW-w64 not found: ' + $kit) }
