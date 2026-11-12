@@ -627,14 +627,25 @@ bool LibraryStore::moveSongWithinPlaylist(int64_t songId, int newIndex) {
                            [songId](const StoredSong* song) { return song->id == songId; });
     if (it == ordered.end()) return false;
     const int from = (int)(it - ordered.begin());
+    // newIndex 表示「插入到第几行之前」（0..size，size = 拖到末尾）。
+    // 先删后插：目标在源位置之后时要减 1。
     int target = newIndex;
     if (target < 0) target = 0;
-    if (target >= (int)ordered.size()) target = (int)ordered.size() - 1;
+    if (target > (int)ordered.size()) target = (int)ordered.size();
     if (target == from) return false;
     StoredSong* moving = *it;
     ordered.erase(it);
+    if (from < target) --target;
+    if (target < 0) target = 0;
+    if (target > (int)ordered.size()) target = (int)ordered.size();
     ordered.insert(ordered.begin() + target, moving);
     for (int i = 0; i < (int)ordered.size(); ++i) ordered[(size_t)i]->sortOrder = i;
+    // songs_ 必须按 (playlistId, sortOrder) 重排：songsOf() 直接按 vector 顺序取，
+    // 不重排会出现「sortOrder 写进去了、界面没变」。歌单拖动是直接改 playlists_，所以没这问题。
+    std::sort(songs_.begin(), songs_.end(), [](const StoredSong& a, const StoredSong& b) {
+        if (a.playlistId != b.playlistId) return a.playlistId < b.playlistId;
+        return a.sortOrder < b.sortOrder;
+    });
     save(nullptr);
     return true;
 }
@@ -646,12 +657,15 @@ bool LibraryStore::movePlaylist(int64_t playlistId, int newIndex) {
                            });
     if (it == playlists_.end()) return false;
     const int from = (int)(it - playlists_.begin());
-    int target = newIndex;
+    int target = newIndex;  // 插入到第几行之前（0..size）
     if (target < 0) target = 0;
-    if (target >= (int)playlists_.size()) target = (int)playlists_.size() - 1;
+    if (target > (int)playlists_.size()) target = (int)playlists_.size();
     if (target == from) return false;
     StoredPlaylist moving = *it;
     playlists_.erase(it);
+    if (from < target) --target;
+    if (target < 0) target = 0;
+    if (target > (int)playlists_.size()) target = (int)playlists_.size();
     playlists_.insert(playlists_.begin() + target, moving);
     save(nullptr);
     return true;

@@ -282,10 +282,25 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     const bool mouseReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
     const bool hoveringRows = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
 
+    // 拖动时靠近上下边缘自动滚动（长歌单也能拖到屏幕外）
+    auto autoScrollNearEdge = [&]() {
+        const float winTop = ImGui::GetWindowPos().y;
+        const float winBottom = winTop + ImGui::GetWindowSize().y;
+        const float edge = 44.0f;
+        float step = 0.0f;
+        if (mouse.y < winTop + edge) {
+            step = -12.0f * ((winTop + edge - mouse.y) / edge);
+        } else if (mouse.y > winBottom - edge) {
+            step = 12.0f * ((mouse.y - (winBottom - edge)) / edge);
+        }
+        if (step != 0.0f) ImGui::SetScrollY(ImGui::GetScrollY() + step);
+    };
+
     // ---------- 普通模式：拖动排序，落点画一条红线 ----------
     int dragTargetIndex = -1;
     if (dragSongActive) {
-        dragTargetIndex = (int)rowHits.size() - 1;
+        // 目标 = 「插入到第几行之前」，默认追加到末尾（rowHits.size()）
+        dragTargetIndex = (int)rowHits.size();
         for (size_t i = 0; i < rowHits.size(); ++i) {
             if (mouse.y < (rowHits[i].min.y + rowHits[i].max.y) * 0.5f) {
                 dragTargetIndex = (int)i;
@@ -298,6 +313,17 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         const float lineX0 = rowHits.empty() ? rowX : rowHits[0].min.x;
         const float lineX1 = rowHits.empty() ? rowX + rowWidth : rowHits[0].max.x;
         rowDraw->AddLine(ImVec2(lineX0, lineY), ImVec2(lineX1, lineY), Colors::Brand, 2.0f);
+        // 被拖起的行变亮 + 上下拖动光标：给「抓住了」的确认感
+        for (const RowHit& hit : rowHits) {
+            if (hit.id == dragSongId) {
+                rowDraw->AddRectFilled(hit.min, hit.max, IM_COL32(255, 255, 255, 0x1E),
+                                       Dimens::RadiusRow);
+                rowDraw->AddRect(hit.min, hit.max, IM_COL32(255, 255, 255, 0x38), Dimens::RadiusRow);
+                break;
+            }
+        }
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+        autoScrollNearEdge();
         if (mouseReleased) {
             actions->reorderSong = true;
             actions->reorderSongId = dragSongId;
@@ -324,6 +350,7 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
                 const ImVec2 bandMax(std::max(bandStart.x, mouse.x), std::max(bandStart.y, mouse.y));
                 rowDraw->AddRectFilled(bandMin, bandMax, IM_COL32(0xEC, 0x41, 0x41, 0x30), 2.0f);
                 rowDraw->AddRect(bandMin, bandMax, IM_COL32(0xEC, 0x41, 0x41, 0xCC), 2.0f);
+                autoScrollNearEdge();
             }
         }
         if (bandArmed && mouseReleased) {

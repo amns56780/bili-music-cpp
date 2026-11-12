@@ -147,7 +147,7 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
         }
         if (draggingPlaylist && !rowRects.empty()) {
             const ImVec2 mouse = ImGui::GetIO().MousePos;
-            int targetIndex = (int)rowRects.size() - 1;
+            int targetIndex = (int)rowRects.size();  // 默认追加到末尾
             for (size_t i = 0; i < rowRects.size(); ++i) {
                 const ImVec2& rectMin = rowRects[i].second.first;
                 const ImVec2& rectMax = rowRects[i].second.second;
@@ -161,9 +161,31 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
             if (targetIndex < (int)rowRects.size()) {
                 lineY = rowRects[(size_t)targetIndex].second.first.y;
             }
-            ImGui::GetWindowDrawList()->AddLine(ImVec2(rowRects[0].second.first.x, lineY),
-                                                ImVec2(rowRects[0].second.second.x, lineY),
-                                                Colors::Brand, 2.0f);
+            ImDrawList* dragDraw = ImGui::GetWindowDrawList();
+            dragDraw->AddLine(ImVec2(rowRects[0].second.first.x, lineY),
+                              ImVec2(rowRects[0].second.second.x, lineY), Colors::Brand, 2.0f);
+            // 拖到上下边缘自动滚动
+            const float winTop = ImGui::GetWindowPos().y;
+            const float winBottom = winTop + ImGui::GetWindowSize().y;
+            const float edge = 36.0f;
+            float scrollStep = 0.0f;
+            if (mouse.y < winTop + edge) {
+                scrollStep = -10.0f * ((winTop + edge - mouse.y) / edge);
+            } else if (mouse.y > winBottom - edge) {
+                scrollStep = 10.0f * ((mouse.y - (winBottom - edge)) / edge);
+            }
+            if (scrollStep != 0.0f) ImGui::SetScrollY(ImGui::GetScrollY() + scrollStep);
+            // 被拖起的歌单行变亮 + 上下拖动光标：给「抓住了」的确认感
+            for (const auto& row : rowRects) {
+                if (row.first == dragPlaylistId) {
+                    dragDraw->AddRectFilled(row.second.first, row.second.second,
+                                            IM_COL32(255, 255, 255, 0x1E), 8.0f);
+                    dragDraw->AddRect(row.second.first, row.second.second,
+                                      IM_COL32(255, 255, 255, 0x38), 8.0f);
+                    break;
+                }
+            }
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
             if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 actions->reorderPlaylist = true;
                 actions->reorderPlaylistId = dragPlaylistId;
