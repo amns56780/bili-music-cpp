@@ -63,6 +63,9 @@ private:
     IAudioSessionControl2* sessionControl_ = nullptr;
     int lastVolume_ = -1;
     uint64_t lastRetryTick_ = 0;
+    uint64_t lastActiveCheckTick_ = 0;
+    std::string targetDeviceId_;  // App 指定的输出设备（空 = 系统默认）
+    std::string boundDeviceId_;   // 当前绑定的会话所在设备
 };
 
 }  // namespace media

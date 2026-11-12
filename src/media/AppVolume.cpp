@@ -12,7 +12,10 @@
 #include <endpointvolume.h>
 #include <objbase.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <vector>
 
 #include "util/AppLog.h"
 
@@ -51,6 +54,16 @@ std::string wideToUtf8Local(const wchar_t* text) {
     std::string out((size_t)(size - 1), '\0');
     WideCharToMultiByte(CP_UTF8, 0, text, -1, out.data(), size - 1, nullptr, nullptr);
     return out;
+}
+
+std::string lowerAscii(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    return text;
+}
+
+bool sameDeviceId(const std::string& a, const std::string& b) {
+    return !a.empty() && !b.empty() && lowerAscii(a) == lowerAscii(b);
 }
 
 template <typename T>
@@ -107,16 +120,23 @@ bool AppVolume::refresh() {
     if (sessionVolume_ == nullptr || sessionControl_ == nullptr) {
         return ensureSession();
     }
-    AudioSessionState state = AudioSessionStateInactive;
-    if (SUCCEEDED(sessionControl_->GetState(&state)) && state != AudioSessionStateExpired) {
+    AudioSessionState state = AudioSessionStateExpired;
+    const bool stateOk = SUCCEEDED(sessionControl_->GetState(&state));
+    const bool expired = !stateOk || state == AudioSessionStateExpired;
+    const uint64_t now = GetTickCount64();
+    if (!expired && state == AudioSessionStateActive &&
+        (targetDeviceId_.empty() || sameDeviceId(targetDeviceId_, boundDeviceId_))) {
         return true;
     }
-    // VLC 重建音频输出后旧会话会 Expired：释放并重新枚举（限频重试交给 ensureSession）
+    // Inactive（本机实测状态不可靠，播放中也常报 Inactive）/ 设备不匹配 / Expired：
+    // 限频重扫，按「目标设备精确匹配 + Active 兜底」重新挑会话。
+    if (!expired && now - lastActiveCheckTick_ < 500) return true;
+    lastActiveCheckTick_ = now;
     safeRelease(sessionControl_);
     safeRelease(meter_);
     safeRelease(sessionVolume_);
     lastRetryTick_ = 0;
-    AppLog::info("AppVolume", "音频会话已失效，重新绑定");
+    if (expired) AppLog::info("AppVolume", "音频会话已失效，重新绑定");
     return ensureSession();
 }
 
@@ -184,7 +204,7 @@ std::string AppVolume::findSessionDeviceId() {
 
 bool AppVolume::ensureSession() {
     if (sessionVolume_ != nullptr) return true;
-    if (sessionManager_ == nullptr) return false;
+    if (enumerator_ == nullptr) return false;
 
     // 新音频会话（换曲/换输出设备）会话音量由系统重置为 100%，
     // 这里清掉旧的缓存值，保证下面 setVolume 一定会把用户音量重新写进去。
@@ -196,46 +216,133 @@ bool AppVolume::ensureSession() {
     if (lastRetryTick_ != 0 && now - lastRetryTick_ < 100) return false;
     lastRetryTick_ = now;
 
-    IAudioSessionEnumerator* sessions = nullptr;
-    if (FAILED(sessionManager_->GetSessionEnumerator(&sessions)) || sessions == nullptr) return false;
+    // 目标设备：App 指定了就用它，否则用系统默认设备。
+    std::string target = targetDeviceId_;
+    if (target.empty()) {
+        IMMDevice* defaultDevice = nullptr;
+        if (SUCCEEDED(enumerator_->GetDefaultAudioEndpoint(eRender, eMultimedia, &defaultDevice)) &&
+            defaultDevice != nullptr) {
+            LPWSTR id = nullptr;
+            if (SUCCEEDED(defaultDevice->GetId(&id)) && id != nullptr) {
+                target = wideToUtf8Local(id);
+                CoTaskMemFree(id);
+            }
+            defaultDevice->Release();
+        }
+    }
 
+    // 扫描本进程在所有活动渲染端点上的会话，按「目标设备精确匹配」优先。
+    // 注意：本机实测 VLC 的会话状态不可靠（播放中也可能报 Inactive，旧设备的会话还可能残留
+    // 成 Active），所以不能只按状态挑 —— 那会把音量写回旧设备，新设备音量调不动。
+    IMMDeviceCollection* collection = nullptr;
+    if (FAILED(enumerator_->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection)) ||
+        collection == nullptr) {
+        return false;
+    }
+    struct Candidate {
+        ISimpleAudioVolume* volume = nullptr;
+        IAudioSessionControl2* control = nullptr;
+        IAudioMeterInformation* meter = nullptr;
+        std::string deviceId;
+        int state = 1;
+    };
+    std::vector<Candidate> candidates;
+    UINT deviceCount = 0;
+    collection->GetCount(&deviceCount);
     const DWORD currentPid = GetCurrentProcessId();
-    int count = 0;
-    sessions->GetCount(&count);
-    for (int i = 0; i < count && sessionVolume_ == nullptr; ++i) {
-        IAudioSessionControl* control = nullptr;
-        if (FAILED(sessions->GetSession(i, &control)) || control == nullptr) continue;
-        IAudioSessionControl2* control2 = nullptr;
-        if (SUCCEEDED(control->QueryInterface(kIidAudioSessionControl2, (void**)&control2)) &&
-            control2 != nullptr) {
-            DWORD pid = 0;
-            control2->GetProcessId(&pid);
-            if (pid == currentPid) {
-                ISimpleAudioVolume* simple = nullptr;
-                if (SUCCEEDED(control2->QueryInterface(kIidSimpleAudioVolume, (void**)&simple)) &&
-                    simple != nullptr) {
-                    sessionVolume_ = simple;
-                    // 留着 control2 用于判断会话是否过期（VLC 换曲/恢复会重建音频输出）
-                    sessionControl_ = control2;
-                    control2 = nullptr;
-                    IAudioMeterInformation* meter = nullptr;
-                    if (SUCCEEDED(sessionControl_->QueryInterface(kIidAudioMeterInformation,
-                                                                  (void**)&meter)) &&
-                        meter != nullptr) {
-                        meter_ = meter;
+    for (UINT d = 0; d < deviceCount; ++d) {
+        IMMDevice* device = nullptr;
+        if (FAILED(collection->Item(d, &device)) || device == nullptr) continue;
+        std::string deviceId;
+        LPWSTR id = nullptr;
+        if (SUCCEEDED(device->GetId(&id)) && id != nullptr) {
+            deviceId = wideToUtf8Local(id);
+            CoTaskMemFree(id);
+        }
+        IAudioSessionManager2* manager = nullptr;
+        if (SUCCEEDED(device->Activate(kIidAudioSessionManager2, CLSCTX_ALL, nullptr,
+                                       (void**)&manager)) &&
+            manager != nullptr) {
+            IAudioSessionEnumerator* sessions = nullptr;
+            if (SUCCEEDED(manager->GetSessionEnumerator(&sessions)) && sessions != nullptr) {
+                int count = 0;
+                sessions->GetCount(&count);
+                for (int i = 0; i < count; ++i) {
+                    IAudioSessionControl* control = nullptr;
+                    if (FAILED(sessions->GetSession(i, &control)) || control == nullptr) continue;
+                    IAudioSessionControl2* control2 = nullptr;
+                    if (SUCCEEDED(control->QueryInterface(kIidAudioSessionControl2,
+                                                          (void**)&control2)) &&
+                        control2 != nullptr) {
+                        DWORD pid = 0;
+                        control2->GetProcessId(&pid);
+                        AudioSessionState state = AudioSessionStateExpired;
+                        control2->GetState(&state);
+                        if (pid == currentPid && state != AudioSessionStateExpired) {
+                            ISimpleAudioVolume* simple = nullptr;
+                            if (SUCCEEDED(control2->QueryInterface(kIidSimpleAudioVolume,
+                                                                   (void**)&simple)) &&
+                                simple != nullptr) {
+                                Candidate candidate;
+                                candidate.volume = simple;
+                                candidate.control = control2;
+                                candidate.deviceId = deviceId;
+                                candidate.state = (int)state;
+                                control2 = nullptr;  // 所有权转移
+                                IAudioMeterInformation* meter = nullptr;
+                                if (SUCCEEDED(candidate.control->QueryInterface(
+                                        kIidAudioMeterInformation, (void**)&meter)) &&
+                                    meter != nullptr) {
+                                    candidate.meter = meter;
+                                }
+                                candidates.push_back(candidate);
+                            }
+                        }
+                        if (control2 != nullptr) control2->Release();
                     }
+                    control->Release();
+                }
+                sessions->Release();
+            }
+            manager->Release();
+        }
+        device->Release();
+    }
+    collection->Release();
+
+    int best = -1;
+    if (!target.empty()) {
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            if (sameDeviceId(candidates[i].deviceId, target)) {
+                if (best < 0 || candidates[i].state < candidates[(size_t)best].state) {
+                    best = (int)i;
                 }
             }
-            if (control2 != nullptr) control2->Release();
         }
-        control->Release();
     }
-    sessions->Release();
-    if (sessionVolume_ != nullptr) {
-        AppLog::info("AppVolume", "已接入 WASAPI 应用级音量");
-        return true;
+    if (best < 0) {
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            if (candidates[i].state == (int)AudioSessionStateActive) {
+                best = (int)i;
+                break;
+            }
+        }
     }
-    return false;
+    if (best < 0 && !candidates.empty()) best = 0;
+    if (best < 0) return false;
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if ((int)i == best) continue;
+        if (candidates[i].volume != nullptr) candidates[i].volume->Release();
+        if (candidates[i].control != nullptr) candidates[i].control->Release();
+        if (candidates[i].meter != nullptr) candidates[i].meter->Release();
+    }
+    sessionVolume_ = candidates[(size_t)best].volume;
+    sessionControl_ = candidates[(size_t)best].control;
+    meter_ = candidates[(size_t)best].meter;
+    boundDeviceId_ = candidates[(size_t)best].deviceId;
+    AppLog::info("AppVolume", "已接入 WASAPI 应用级音量（设备 " + boundDeviceId_ + "）");
+    return true;
 }
 
 float AppVolume::uiToLevel(int percent) {
@@ -262,36 +369,14 @@ int AppVolume::levelToUi(float level) {
 }
 
 bool AppVolume::setDevice(const std::wstring& endpointId) {
-    if (enumerator_ == nullptr) return false;
-    // 旧设备上的会话 / 会话管理器全部释放，重新按新设备绑定
+    // 记下目标设备：热切换后要严格绑到这台设备上的会话。
+    // （旧设备的会话可能还残留着 Active，只按状态挑会写回旧设备，新设备音量就调不动。）
+    targetDeviceId_ = wideToUtf8Local(endpointId.c_str());
     safeRelease(sessionControl_);
     safeRelease(meter_);
     safeRelease(sessionVolume_);
-    safeRelease(sessionManager_);
-    safeRelease(device_);
-    lastVolume_ = -1;
     lastRetryTick_ = 0;
-
-    if (!endpointId.empty()) {
-        if (FAILED(enumerator_->GetDevice(endpointId.c_str(), &device_))) {
-            device_ = nullptr;
-        }
-    }
-    if (device_ == nullptr) {
-        if (FAILED(enumerator_->GetDefaultAudioEndpoint(eRender, eMultimedia, &device_)) ||
-            device_ == nullptr) {
-            AppLog::info("AppVolume", "音量改绑失败：拿不到输出设备");
-            return false;
-        }
-    }
-    if (FAILED(device_->Activate(kIidAudioSessionManager2, CLSCTX_ALL, nullptr,
-                                 (void**)&sessionManager_)) ||
-        sessionManager_ == nullptr) {
-        AppLog::info("AppVolume", "音量改绑失败：会话管理器激活失败");
-        return false;
-    }
-    AppLog::info("AppVolume", endpointId.empty() ? "音量改绑系统默认设备" : "音量改绑输出设备");
-    // 新设备上的会话可能还没创建（还没出声）：失败也没关系，pumpVolume 会继续重试
+    lastActiveCheckTick_ = 0;
     return ensureSession();
 }
 
