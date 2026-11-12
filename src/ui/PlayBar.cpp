@@ -196,7 +196,8 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         ImGui::PopID();
     }
 
-    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 7.0f), Colors::Text2,
+    // 图标字体在 em 框里偏上一点，往下挪 2px 才和音量滑杆视觉居中对齐
+    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 5.0f), Colors::Text2,
                   volumeIcon.c_str());
     static bool volumeDragging = false;
     static float volumeDraft = 0.8f;
