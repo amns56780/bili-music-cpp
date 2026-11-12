@@ -77,6 +77,8 @@ public:
     int volume() const { return volume_; }
     void setVolume(int value);
     void pumpVolume();
+    // 输出设备热切换后，把音量会话改绑到新设备并重新下发音量
+    bool setVolumeDevice(const std::wstring& deviceId);
 
 private:
     void releasePlayer();

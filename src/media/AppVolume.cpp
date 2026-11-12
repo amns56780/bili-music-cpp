@@ -261,6 +261,40 @@ int AppVolume::levelToUi(float level) {
     return ui < 11 ? 11 : (ui > 99 ? 99 : ui);
 }
 
+bool AppVolume::setDevice(const std::wstring& endpointId) {
+    if (enumerator_ == nullptr) return false;
+    // 旧设备上的会话 / 会话管理器全部释放，重新按新设备绑定
+    safeRelease(sessionControl_);
+    safeRelease(meter_);
+    safeRelease(sessionVolume_);
+    safeRelease(sessionManager_);
+    safeRelease(device_);
+    lastVolume_ = -1;
+    lastRetryTick_ = 0;
+
+    if (!endpointId.empty()) {
+        if (FAILED(enumerator_->GetDevice(endpointId.c_str(), &device_))) {
+            device_ = nullptr;
+        }
+    }
+    if (device_ == nullptr) {
+        if (FAILED(enumerator_->GetDefaultAudioEndpoint(eRender, eMultimedia, &device_)) ||
+            device_ == nullptr) {
+            AppLog::info("AppVolume", "音量改绑失败：拿不到输出设备");
+            return false;
+        }
+    }
+    if (FAILED(device_->Activate(kIidAudioSessionManager2, CLSCTX_ALL, nullptr,
+                                 (void**)&sessionManager_)) ||
+        sessionManager_ == nullptr) {
+        AppLog::info("AppVolume", "音量改绑失败：会话管理器激活失败");
+        return false;
+    }
+    AppLog::info("AppVolume", endpointId.empty() ? "音量改绑系统默认设备" : "音量改绑输出设备");
+    // 新设备上的会话可能还没创建（还没出声）：失败也没关系，pumpVolume 会继续重试
+    return ensureSession();
+}
+
 bool AppVolume::setVolume(int percent, bool force) {
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
     if (!ensureSession()) return false;

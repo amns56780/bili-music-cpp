@@ -40,6 +40,10 @@ public:
     // 会话失效（VLC 重建音频输出）时重新绑定；返回当前是否可用
     bool refresh();
 
+    // 改绑到指定输出设备（空 = 系统默认）。App 热切换输出设备后必须调用：
+    // 原来的会话管理器属于旧设备，继续写只会改到旧设备上的会话，新设备音量调不动。
+    bool setDevice(const std::wstring& endpointId);
+
     // 换曲 / 起播时清掉重试节流，让首次绑定不必等 100ms
     void resetRetryThrottle() { lastRetryTick_ = 0; }
 

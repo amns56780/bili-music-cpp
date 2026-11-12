@@ -340,6 +340,7 @@ void App::init(GLFWwindow* window) {
     }
     selectedOutputDeviceId_ = bili_.getSetting("audio.outputDevice");
     media::AudioSpectrum::setDevice(utf8ToWide(selectedOutputDeviceId_));  // 频谱跟随输出设备
+    engine_.setVolumeDevice(utf8ToWide(selectedOutputDeviceId_));          // 音量会话绑定到该设备
     if (!selectedOutputDeviceId_.empty()) {
         // 关键：实例必须「带着 --mmdevice-audio-device 创建」，aout 建出来才会用指定设备。
         // 建成之后再 setAudioOutputDevice 是无效的（VLC 3 只在 aout 创建时读设备）。
@@ -1264,6 +1265,8 @@ void App::applyOutputDevice(const std::string& id) {
     bili_.setSetting("audio.outputDevice", id);
     // 频谱（音律条）要抓 App 自己的输出设备；系统默认设备在 App 切到别的设备后是静音的。
     media::AudioSpectrum::setDevice(utf8ToWide(id));
+    // 音量会话也要改绑到新设备，否则继续写旧设备的会话，新设备音量调不动。
+    engine_.setVolumeDevice(utf8ToWide(id));
     // VLC 3 对「播放中换设备」不可靠：aout 只在创建时读设备，运行中设置基本被忽略。
     // 这里直接按新设备重建整个 libvlc 实例（--mmdevice-audio-device），再回到原进度重新起播，
     // 保证声音真的换到新设备，而不是只在界面上显示换了。

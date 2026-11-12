@@ -604,6 +604,15 @@ void VlcEngine::setVolume(int value) {
     pumpVolume();
 }
 
+bool VlcEngine::setVolumeDevice(const std::wstring& deviceId) {
+    volumeApplied_ = false;
+    volumeDirty_ = true;
+    const bool ok = appVolume_.setDevice(deviceId);
+    appVolume_.resetRetryThrottle();
+    pumpVolume();
+    return ok;
+}
+
 void VlcEngine::pumpVolume() {
     verifyOutputDevice();
     if (!api_ || !player_) return;
