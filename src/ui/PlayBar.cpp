@@ -196,13 +196,13 @@ void DrawPlayBar(const PlayBarData& data, PlayBarActions* actions, float width, 
         ImGui::PopID();
     }
 
-    // 图标字体在 em 框里偏上一点，往下挪 2px 才和音量滑杆视觉居中对齐
-    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 5.0f), Colors::Text2,
+    // 与右侧「11%」文字的视觉中心对齐（实测图标字体在 em 框里偏上）
+    draw->AddText(GetFonts().body, 18.0f, abs(rightLeft, rightCenterY - 3.0f), Colors::Text2,
                   volumeIcon.c_str());
     static bool volumeDragging = false;
     static float volumeDraft = 0.8f;
     if (!volumeDragging) volumeDraft = data.volume / 100.0f;
-    ImGui::SetCursorPos(ImVec2(rightLeft + 24.0f, rightCenterY - 7.0f));
+    ImGui::SetCursorPos(ImVec2(rightLeft + 24.0f, rightCenterY - 4.5f));
     float volumeValue = volumeDraft;
     const SliderResult volumeResult = ThinSlider("volume", &volumeValue, 110.0f, 14.0f, 4.0f, Colors::Text2);
     if (volumeResult.changed) {
