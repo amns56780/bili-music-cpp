@@ -237,7 +237,7 @@ sourceType 语义：FAV（收藏夹）/ TOVIEW（稍后再看）/ UPLOAD（UP主
 
 - 安装目录 D:/bilimusic（NSIS 按用户安装，375 个文件，exe 约 6.1 MB + vlc 约 135 MB）。
 - 单实例；关窗口默认进托盘，托盘菜单可退出。
-- 最近一次安装：v1.1.4，启动日志「bilimusic v1.1.4 启动」。
+- 最近一次安装：v1.1.5，启动日志「bilimusic v1.1.5 启动」。
 
 ---
 
