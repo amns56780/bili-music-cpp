@@ -13,9 +13,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -46,6 +48,23 @@ std::array<float, AudioSpectrum::kBands> gBands{};
 void publishBands(const std::array<float, AudioSpectrum::kBands>& bands) {
     std::lock_guard<std::mutex> lock(gBandMutex);
     gBands = bands;
+}
+
+// 当前默认输出设备 id（用于检测「用户切换了播放设备」，比如插拔耳机）
+std::wstring queryDefaultDeviceId(IMMDeviceEnumerator* enumerator) {
+    std::wstring result;
+    if (enumerator == nullptr) return result;
+    IMMDevice* device = nullptr;
+    if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)) &&
+        device != nullptr) {
+        LPWSTR id = nullptr;
+        if (SUCCEEDED(device->GetId(&id)) && id != nullptr) {
+            result.assign(id);
+            CoTaskMemFree(id);
+        }
+        device->Release();
+    }
+    return result;
 }
 
 // 原地基 2 FFT
@@ -125,7 +144,9 @@ void computeBands(const std::vector<float>& real, const std::vector<float>& imag
     }
 }
 
-void runCapture() {
+// 一次采集会话：绑定「当前默认输出设备」做 loopback，直到采集失败 / 设备切换 / 被要求停止。
+// 返回 true 表示正常跑过采集（可能是设备切换导致结束），false 表示初始化失败。
+bool runCaptureSession() {
     IAudioClient* audioClient = nullptr;
     IAudioCaptureClient* captureClient = nullptr;
     WAVEFORMATEX* mixFormat = nullptr;
@@ -156,12 +177,11 @@ void runCapture() {
             enumerator = nullptr;
         }
         if (comInitialized) CoUninitialize();
-        gRunning = false;
     };
 
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
         cleanup();
-        return;
+        return false;
     }
     comInitialized = true;
 
@@ -170,35 +190,35 @@ void runCapture() {
         enumerator == nullptr) {
         AppLog::warn("AudioSpectrum", "无法创建 MMDeviceEnumerator，频谱不可用");
         cleanup();
-        return;
+        return false;
     }
     if (FAILED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)) ||
         device == nullptr) {
         cleanup();
-        return;
+        return false;
     }
     if (FAILED(device->Activate(kIidAudioClient, CLSCTX_ALL, nullptr, (void**)&audioClient)) ||
         audioClient == nullptr) {
         cleanup();
-        return;
+        return false;
     }
     if (FAILED(audioClient->GetMixFormat(&mixFormat)) || mixFormat == nullptr) {
         cleanup();
-        return;
+        return false;
     }
     const int channels = (int)mixFormat->nChannels;
     const int sampleRate = (int)mixFormat->nSamplesPerSec;
     const int bits = (int)mixFormat->wBitsPerSample;
     if (channels <= 0 || sampleRate <= 0) {
         cleanup();
-        return;
+        return false;
     }
     const bool isFloat = bits == 32;
     const bool isInt16 = bits == 16;
     if (!isFloat && !isInt16) {
         AppLog::info("AudioSpectrum", "不支持的采样格式 bits=" + std::to_string(bits));
         cleanup();
-        return;
+        return false;
     }
     const int bytesPerSample = bits / 8;
     const int frameBytes = bytesPerSample * channels;
@@ -207,17 +227,19 @@ void runCapture() {
                                        10000000LL, 0, mixFormat, nullptr))) {
         AppLog::warn("AudioSpectrum", "loopback 初始化失败");
         cleanup();
-        return;
+        return false;
     }
     if (FAILED(audioClient->GetService(kIidAudioCaptureClient, (void**)&captureClient)) ||
         captureClient == nullptr) {
         cleanup();
-        return;
+        return false;
     }
     if (FAILED(audioClient->Start())) {
         cleanup();
-        return;
+        return false;
     }
+    // 记住当前绑定的默认设备，用于检测切换
+    const std::wstring currentDeviceId = queryDefaultDeviceId(enumerator);
     AppLog::info("AudioSpectrum", "频谱采集启动 " + std::to_string(channels) + "ch " +
                                       std::to_string(sampleRate) + "Hz " + std::to_string(bits) +
                                       "bit");
@@ -235,6 +257,7 @@ void runCapture() {
     std::array<float, AudioSpectrum::kBands> smooth{};
     std::vector<unsigned char> packetBytes;
     uint64_t lastAnalyze = 0;
+    uint64_t lastDeviceCheck = GetTickCount64();
 
     while (gRunning.load()) {
         UINT32 packetFrames = 0;
@@ -280,6 +303,16 @@ void runCapture() {
         }
 
         const uint64_t now = GetTickCount64();
+        // 用户切换输出设备（插拔耳机 / 系统里改默认设备）后，旧 loopback 抓的是已静音的设备，
+        // 音律条会「没反应」。这里每秒比对一次默认设备，变了就重建采集会话。
+        if (now - lastDeviceCheck >= 1000) {
+            lastDeviceCheck = now;
+            const std::wstring latestDeviceId = queryDefaultDeviceId(enumerator);
+            if (!latestDeviceId.empty() && latestDeviceId != currentDeviceId) {
+                AppLog::info("AudioSpectrum", "默认输出设备已切换，重建频谱采集");
+                break;
+            }
+        }
         if (filled >= kFftSize && now - lastAnalyze >= 33) {
             lastAnalyze = now;
             const int start = (ringPos - kFftSize + ringSize) % ringSize;
@@ -297,7 +330,18 @@ void runCapture() {
     }
 
     cleanup();
-    AppLog::info("AudioSpectrum", "频谱采集结束");
+    return true;
+}
+
+void runCapture() {
+    while (gRunning.load()) {
+        if (!runCaptureSession()) {
+            // 初始化失败（没有输出设备 / 独占模式等）：等一会儿再试，避免空转刷日志
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+        if (!gRunning.load()) break;
+    }
+    gRunning = false;
 }
 
 }  // namespace

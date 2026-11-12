@@ -84,6 +84,10 @@ public:
     bool setPlaylistCover(int64_t id, const std::string& coverUrl, const std::string& coverPath);
     bool setSongLocalPath(int64_t songId, const std::string& localPath);
     bool setSongCover(int64_t songId, const std::string& coverUrl);
+    // 拖动排序：歌单内曲目（newIndex 为 0 基目标位置，会自动重排 sortOrder）
+    bool moveSongWithinPlaylist(int64_t songId, int newIndex);
+    // 拖动排序：歌单顺序（playlists.json 里数组顺序即显示顺序）
+    bool movePlaylist(int64_t playlistId, int newIndex);
 
     // ---------------- 撤销（快照） ----------------
     // 记录整份内存状态；撤销时整份还原并落盘。结构很小（几百首歌），直接拷贝最省事也最可靠。

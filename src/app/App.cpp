@@ -1686,6 +1686,7 @@ void App::drawImmersive() {
     const float volumeX = settingsX - btnGap - btnSize;
     const float modeX = volumeX - btnGap - btnSize;
     const float fullscreenX = modeX - btnGap - btnSize;
+    const float deviceX = fullscreenX - btnGap - btnSize;
     uint32_t modeIcon = Icons::PlaylistPlay;
     if (mode_ == 1) modeIcon = Icons::Repeat;
     else if (mode_ == 2) modeIcon = Icons::RepeatOne;
@@ -1696,6 +1697,14 @@ void App::drawImmersive() {
     if (roundButton("imm_fullscreen", immersiveFullscreen_ ? Icons::FullscreenExit : Icons::Fullscreen,
                     fullscreenX, btnY, btnSize, px(20), immersiveFullscreen_, buttonBackground)) {
         toggleImmersiveFullscreen();
+    }
+    // 沉浸界面也能切播放设备（之前只能在普通界面里切，用户反馈沉浸页没有入口）
+    if (roundButton("imm_device", Icons::Headset, deviceX, btnY, btnSize, px(20), false,
+                    buttonBackground)) {
+        immersiveVolumeOpen_ = false;
+        immersiveBgMenuOpen_ = false;
+        refreshOutputDevices();
+        immersiveDeviceDialogRequested_ = true;
     }
     if (roundButton("imm_mode", modeIcon, modeX, btnY, btnSize, px(20), false, buttonBackground)) {
         setPlayMode((mode_ + 1) % 4);
@@ -1747,6 +1756,20 @@ void App::drawImmersive() {
                       ImVec2(pMax.x - px(14) - volumeTextWidth,
                              pMin.y + panelH * 0.5f - px(15) * 0.55f),
                       fade(IM_COL32(255, 255, 255, 0xCC)), volumeText);
+    }
+
+    // 点击音量面板外任意位置即隐藏（用户反馈：原先必须再点一次音量按钮）
+    if (immersiveVolumeOpen_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const ImVec2 volumePanelMin(width - px(20) - px(280), slideOffset + px(72));
+        const ImVec2 volumePanelMax(volumePanelMin.x + px(280), volumePanelMin.y + px(46));
+        const bool inVolumePanel = mouse.x >= volumePanelMin.x && mouse.x <= volumePanelMax.x &&
+                                   mouse.y >= volumePanelMin.y && mouse.y <= volumePanelMax.y;
+        const bool onVolumeButton = mouse.x >= volumeX && mouse.x <= volumeX + btnSize &&
+                                    mouse.y >= btnY && mouse.y <= btnY + btnSize;
+        if (!inVolumePanel && !onVolumeButton) {
+            immersiveVolumeOpen_ = false;
+        }
     }
 
     // ---------------- 背景设置弹层 ----------------
@@ -1808,6 +1831,38 @@ void App::drawImmersive() {
             immersiveShowWave_ = !immersiveShowWave_;
             immersiveBgMenuOpen_ = false;
         }
+    }
+
+    // ---------------- 输出设备弹窗（沉浸模式） ----------------
+    if (immersiveDeviceDialogRequested_) ImGui::OpenPopup("沉浸输出设备");
+    ImGui::SetNextWindowPos(ImVec2(width * 0.5f, slideOffset + height * 0.5f), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("沉浸输出设备", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!immersiveDeviceDialogRequested_) ImGui::CloseCurrentPopup();
+        ImGui::TextUnformatted("选择音频输出设备（切换后立即生效，会从当前位置续播）：");
+        ImGui::Spacing();
+        ImGui::BeginChild("##imm_output_list", ImVec2(px(420), px(220)), ImGuiChildFlags_Borders);
+        if (ImGui::Selectable("默认设备（系统）", selectedOutputDeviceId_.empty())) {
+            applyOutputDevice(std::string());
+        }
+        for (const auto& device : outputDevices_) {
+            const bool deviceSelected = device.first == selectedOutputDeviceId_;
+            if (ImGui::Selectable(Ui::DisplayText(device.second).c_str(), deviceSelected)) {
+                applyOutputDevice(device.first);
+            }
+        }
+        if (outputDevices_.empty()) {
+            ImGui::TextDisabled("还没有枚举到设备（先播放一首歌，或点「刷新」）");
+        }
+        ImGui::EndChild();
+        ImGui::Spacing();
+        if (ImGui::Button("刷新", ImVec2(px(110), px(32)))) refreshOutputDevices();
+        ImGui::SameLine();
+        if (ImGui::Button("关闭", ImVec2(px(110), px(32)))) {
+            immersiveDeviceDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     // ---------------- 主内容 ----------------
@@ -4086,6 +4141,12 @@ void App::draw() {
 
     // ================= 动作分发 =================
     if (sidebarActions.selectPlaylist) selectPlaylist(sidebarActions.playlistId);
+    if (sidebarActions.reorderPlaylist && sidebarActions.reorderPlaylistId >= 0) {
+        if (store_.movePlaylist(sidebarActions.reorderPlaylistId,
+                                sidebarActions.reorderPlaylistIndex)) {
+            setStatus("已调整歌单顺序");
+        }
+    }
     if (sidebarActions.createPlaylist) openCreatePlaylistDialog();
     if (sidebarActions.pasteLink) linkDialogRequested_ = true;
     if (sidebarActions.login) loginDialogRequested_ = true;
@@ -4144,6 +4205,15 @@ void App::draw() {
         for (const StoredSong* song : currentSongs()) selectedSongIds_.insert(song->id);
     }
     if (pageActions.clearSelection) selectedSongIds_.clear();
+    if (pageActions.setSelection) {
+        selectedSongIds_.clear();
+        for (long long songId : pageActions.selectionIds) selectedSongIds_.insert(songId);
+    }
+    if (pageActions.reorderSong && pageActions.reorderSongId >= 0) {
+        if (store_.moveSongWithinPlaylist(pageActions.reorderSongId, pageActions.reorderSongIndex)) {
+            setStatus("已调整曲目顺序");
+        }
+    }
     if (pageActions.copySelected) {
         if (selectedSongIds_.empty()) {
             setStatus("先勾选要复制的曲目");

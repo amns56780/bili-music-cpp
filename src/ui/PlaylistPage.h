@@ -32,6 +32,13 @@ struct PlaylistPageActions {
     bool copySelected = false;
     bool moveSelected = false;
     bool deleteSelected = false;
+    // 拖动排序：把歌单内第 reorderSongId 首拖到 reorderSongIndex（0 基）
+    bool reorderSong = false;
+    long long reorderSongId = -1;
+    int reorderSongIndex = -1;
+    // 框选：一次性设置选中集合（空集合 = 清空）
+    bool setSelection = false;
+    std::vector<long long> selectionIds;
     long long playSongId = -1;
     bool showMenuAboutEdit = false;
 };

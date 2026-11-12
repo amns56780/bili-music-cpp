@@ -406,6 +406,7 @@ private:
     bool immersiveShowWave_ = true;
     bool immersiveVolumeOpen_ = false;
     bool immersiveBgMenuOpen_ = false;
+    bool immersiveDeviceDialogRequested_ = false;  // 沉浸模式下的「输出设备」弹窗
     uint64_t immersiveEnteredTick_ = 0;
     std::string immersiveModeTip_;
     uint64_t immersiveModeTipUntil_ = 0;

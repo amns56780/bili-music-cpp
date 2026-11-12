@@ -1,7 +1,11 @@
 #include "ui/PlaylistPage.h"
 
+#include <algorithm>
+#include <cmath>
 #include <ctime>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "ui/Components.h"
 #include "ui/Icons.h"
@@ -173,6 +177,31 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     ImGui::SetCursorPos(ImVec2(rowX, rowsTop));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("##song_rows", ImVec2(rowWidth, contentHeight - rowsTop - 8.0f), ImGuiChildFlags_None);
+
+    // 拖动排序 / 框选多选的状态（按歌单隔离，切歌单自动复位）
+    static long long dragScopePlaylistId = -1;
+    static long long dragSongId = -1;
+    static bool dragSongActive = false;
+    static bool bandArmed = false;
+    static bool bandActive = false;
+    static ImVec2 bandStart(0.0f, 0.0f);
+    if (dragScopePlaylistId != playlist->id) {
+        dragScopePlaylistId = playlist->id;
+        dragSongId = -1;
+        dragSongActive = false;
+        bandArmed = false;
+        bandActive = false;
+    }
+
+    struct RowHit {
+        long long id = 0;
+        ImVec2 min;
+        ImVec2 max;
+    };
+    std::vector<RowHit> rowHits;
+    rowHits.reserve(songs.size());
+    long long pendingToggleId = -1;
+
     // 行内容必须画在这个子窗口自己的 draw list 上：用外层窗口的 draw list 画，滚出视区的行不会被
     // 子窗口裁剪，会漏到表头 / 封面上（表现为「时长」列一串时间飘在表头上面）。
     ImDrawList* rowDraw = ImGui::GetWindowDrawList();
@@ -233,16 +262,92 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
         rowDraw->AddText(GetFonts().small, 15.0f,
                          ImVec2(pos.x + rowWidth - 30.0f - durationWidth, pos.y + 15.0f), Colors::Text3,
                          duration.c_str());
+        rowHits.push_back({song.id, pos, ImVec2(pos.x + rowWidth, pos.y + Dimens::RowHeight)});
+        // 普通模式：按住某一行上下拖动 = 调整歌单内顺序
+        if (!selectMode && ImGui::IsItemActive() &&
+            ImGui::IsMouseDragging(ImGuiMouseButton_Left, 6.0f)) {
+            dragSongActive = true;
+            dragSongId = song.id;
+        }
         if (selectMode) {
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-                actions->toggleSong = true;
-                actions->toggleSongId = song.id;
-            }
-        } else if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) pendingToggleId = song.id;
+        } else if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !dragSongActive) {
             actions->playSongId = song.id;
         }
         ImGui::PopID();
     }
+
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const bool mouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool mouseReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    const bool hoveringRows = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+
+    // ---------- 普通模式：拖动排序，落点画一条红线 ----------
+    int dragTargetIndex = -1;
+    if (dragSongActive) {
+        dragTargetIndex = (int)rowHits.size() - 1;
+        for (size_t i = 0; i < rowHits.size(); ++i) {
+            if (mouse.y < (rowHits[i].min.y + rowHits[i].max.y) * 0.5f) {
+                dragTargetIndex = (int)i;
+                break;
+            }
+        }
+        if (dragTargetIndex < 0) dragTargetIndex = 0;
+        float lineY = rowHits.empty() ? rowsTop : rowHits.back().max.y;
+        if (dragTargetIndex < (int)rowHits.size()) lineY = rowHits[(size_t)dragTargetIndex].min.y;
+        const float lineX0 = rowHits.empty() ? rowX : rowHits[0].min.x;
+        const float lineX1 = rowHits.empty() ? rowX + rowWidth : rowHits[0].max.x;
+        rowDraw->AddLine(ImVec2(lineX0, lineY), ImVec2(lineX1, lineY), Colors::Brand, 2.0f);
+        if (mouseReleased) {
+            actions->reorderSong = true;
+            actions->reorderSongId = dragSongId;
+            actions->reorderSongIndex = dragTargetIndex;
+            dragSongActive = false;
+            dragSongId = -1;
+        }
+    }
+
+    // ---------- 多选模式：按住拖动框选（类似资源管理器） ----------
+    if (selectMode) {
+        if (hoveringRows && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            bandStart = mouse;
+            bandArmed = true;
+            bandActive = false;
+        }
+        if (bandArmed && mouseDown) {
+            if (!bandActive && (std::fabs(mouse.x - bandStart.x) > 4.0f ||
+                                std::fabs(mouse.y - bandStart.y) > 4.0f)) {
+                bandActive = true;
+            }
+            if (bandActive) {
+                const ImVec2 bandMin(std::min(bandStart.x, mouse.x), std::min(bandStart.y, mouse.y));
+                const ImVec2 bandMax(std::max(bandStart.x, mouse.x), std::max(bandStart.y, mouse.y));
+                rowDraw->AddRectFilled(bandMin, bandMax, IM_COL32(0xEC, 0x41, 0x41, 0x30), 2.0f);
+                rowDraw->AddRect(bandMin, bandMax, IM_COL32(0xEC, 0x41, 0x41, 0xCC), 2.0f);
+            }
+        }
+        if (bandArmed && mouseReleased) {
+            if (bandActive) {
+                const ImVec2 bandMin(std::min(bandStart.x, mouse.x), std::min(bandStart.y, mouse.y));
+                const ImVec2 bandMax(std::max(bandStart.x, mouse.x), std::max(bandStart.y, mouse.y));
+                std::vector<long long> hits;
+                for (const RowHit& hit : rowHits) {
+                    if (hit.max.x >= bandMin.x && hit.min.x <= bandMax.x && hit.max.y >= bandMin.y &&
+                        hit.min.y <= bandMax.y) {
+                        hits.push_back(hit.id);
+                    }
+                }
+                actions->setSelection = true;
+                actions->selectionIds = std::move(hits);
+            } else if (pendingToggleId >= 0) {
+                actions->toggleSong = true;
+                actions->toggleSongId = pendingToggleId;
+            }
+            bandArmed = false;
+            bandActive = false;
+        }
+    }
+
     ImGui::EndChild();
     ImGui::PopStyleColor();
 

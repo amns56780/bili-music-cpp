@@ -21,6 +21,10 @@ struct SidebarActions {
     bool login = false;
     bool logout = false;
     bool toggleActionsExpanded = false;
+    // 拖动排序歌单
+    bool reorderPlaylist = false;
+    long long reorderPlaylistId = -1;
+    int reorderPlaylistIndex = -1;
 };
 
 void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float height,

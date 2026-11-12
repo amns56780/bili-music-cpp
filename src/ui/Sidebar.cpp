@@ -1,6 +1,8 @@
 #include "ui/Sidebar.h"
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "ui/Components.h"
 #include "ui/Icons.h"
@@ -20,13 +22,23 @@ std::string sourceLabel(const std::string& sourceType) {
 }
 
 void drawPlaylistRow(const ImVec2& origin, const StoredPlaylist& playlist, const std::string& subtitle,
-                     bool selected, float rowWidth, SidebarActions* actions) {
+                     bool selected, float rowWidth, SidebarActions* actions,
+                     std::vector<std::pair<long long, std::pair<ImVec2, ImVec2>>>* rowRects,
+                     bool* dragging, long long* dragId) {
     ImGui::PushID((int)playlist.id);
     ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX(), ImGui::GetCursorPosY()));
     const bool pressed = ImGui::InvisibleButton("##row", ImVec2(rowWidth, 54.0f));
     const bool hovered = ImGui::IsItemHovered();
     if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     const ImVec2 pos = ImGui::GetItemRectMin();
+    if (rowRects != nullptr) {
+        rowRects->push_back({playlist.id, {pos, ImVec2(pos.x + rowWidth, pos.y + 54.0f)}});
+    }
+    if (dragging != nullptr && ImGui::IsItemActive() &&
+        ImGui::IsMouseDragging(ImGuiMouseButton_Left, 6.0f)) {
+        *dragging = true;
+        if (dragId != nullptr) *dragId = playlist.id;
+    }
     ImDrawList* draw = ImGui::GetWindowDrawList();
     if (selected || hovered) {
         draw->AddRectFilled(pos, ImVec2(pos.x + rowWidth, pos.y + 54.0f),
@@ -46,7 +58,7 @@ void drawPlaylistRow(const ImVec2& origin, const StoredPlaylist& playlist, const
     TextEllipsis(subtitle, textWidth, GetFonts().small, Colors::Text3,
                  ImVec2(textX, pos.y + 30.0f));
     ImGui::PopID();
-    if (pressed) {
+    if (pressed && (dragging == nullptr || !*dragging)) {
         actions->selectPlaylist = true;
         actions->playlistId = playlist.id;
     }
@@ -121,12 +133,44 @@ void DrawSidebar(const LibraryStore& store, long long selectedPlaylistId, float 
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
         ImGui::BeginChild("##playlist_list", ImVec2(width - 16.0f, listHeight), ImGuiChildFlags_None);
         const float rowWidth = ImGui::GetContentRegionAvail().x;
+        // 拖动排序：按住歌单行上下拖动（松手后写回 playlists.json 的数组顺序）
+        std::vector<std::pair<long long, std::pair<ImVec2, ImVec2>>> rowRects;
+        static long long dragPlaylistId = -1;
+        static bool draggingPlaylist = false;
         for (const StoredPlaylist& playlist : store.playlists()) {
             const std::string subtitle = sourceLabel(playlist.sourceType) + " · " +
                                          std::to_string(store.songCount(playlist.id)) + " 首";
             drawPlaylistRow(ImGui::GetWindowPos(), playlist, subtitle,
-                            playlist.id == selectedPlaylistId, rowWidth, actions);
+                            playlist.id == selectedPlaylistId, rowWidth, actions, &rowRects,
+                            &draggingPlaylist, &dragPlaylistId);
             ImGui::Dummy(ImVec2(1.0f, 2.0f));
+        }
+        if (draggingPlaylist && !rowRects.empty()) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            int targetIndex = (int)rowRects.size() - 1;
+            for (size_t i = 0; i < rowRects.size(); ++i) {
+                const ImVec2& rectMin = rowRects[i].second.first;
+                const ImVec2& rectMax = rowRects[i].second.second;
+                if (mouse.y < (rectMin.y + rectMax.y) * 0.5f) {
+                    targetIndex = (int)i;
+                    break;
+                }
+            }
+            if (targetIndex < 0) targetIndex = 0;
+            float lineY = rowRects.back().second.second.y;
+            if (targetIndex < (int)rowRects.size()) {
+                lineY = rowRects[(size_t)targetIndex].second.first.y;
+            }
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(rowRects[0].second.first.x, lineY),
+                                                ImVec2(rowRects[0].second.second.x, lineY),
+                                                Colors::Brand, 2.0f);
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                actions->reorderPlaylist = true;
+                actions->reorderPlaylistId = dragPlaylistId;
+                actions->reorderPlaylistIndex = targetIndex;
+                draggingPlaylist = false;
+                dragPlaylistId = -1;
+            }
         }
         if (store.playlists().empty()) {
             ImGui::SetCursorPos(ImVec2(12.0f, 8.0f));

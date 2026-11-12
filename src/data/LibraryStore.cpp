@@ -605,3 +605,54 @@ bool LibraryStore::setPlaylistCover(int64_t id, const std::string& coverUrl,
     return false;
 }
 
+
+
+bool LibraryStore::moveSongWithinPlaylist(int64_t songId, int newIndex) {
+    int64_t playlistId = -1;
+    for (const StoredSong& song : songs_) {
+        if (song.id == songId) {
+            playlistId = song.playlistId;
+            break;
+        }
+    }
+    if (playlistId < 0) return false;
+    std::vector<StoredSong*> ordered;
+    for (StoredSong& song : songs_) {
+        if (song.playlistId == playlistId) ordered.push_back(&song);
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const StoredSong* a, const StoredSong* b) {
+        return a->sortOrder < b->sortOrder;
+    });
+    auto it = std::find_if(ordered.begin(), ordered.end(),
+                           [songId](const StoredSong* song) { return song->id == songId; });
+    if (it == ordered.end()) return false;
+    const int from = (int)(it - ordered.begin());
+    int target = newIndex;
+    if (target < 0) target = 0;
+    if (target >= (int)ordered.size()) target = (int)ordered.size() - 1;
+    if (target == from) return false;
+    StoredSong* moving = *it;
+    ordered.erase(it);
+    ordered.insert(ordered.begin() + target, moving);
+    for (int i = 0; i < (int)ordered.size(); ++i) ordered[(size_t)i]->sortOrder = i;
+    save(nullptr);
+    return true;
+}
+
+bool LibraryStore::movePlaylist(int64_t playlistId, int newIndex) {
+    auto it = std::find_if(playlists_.begin(), playlists_.end(),
+                           [playlistId](const StoredPlaylist& playlist) {
+                               return playlist.id == playlistId;
+                           });
+    if (it == playlists_.end()) return false;
+    const int from = (int)(it - playlists_.begin());
+    int target = newIndex;
+    if (target < 0) target = 0;
+    if (target >= (int)playlists_.size()) target = (int)playlists_.size() - 1;
+    if (target == from) return false;
+    StoredPlaylist moving = *it;
+    playlists_.erase(it);
+    playlists_.insert(playlists_.begin() + target, moving);
+    save(nullptr);
+    return true;
+}
