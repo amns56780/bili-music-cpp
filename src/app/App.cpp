@@ -339,6 +339,7 @@ void App::init(GLFWwindow* window) {
         setStatus("VLC 内核加载失败：" + engineError, true);
     }
     selectedOutputDeviceId_ = bili_.getSetting("audio.outputDevice");
+    media::AudioSpectrum::setDevice(utf8ToWide(selectedOutputDeviceId_));  // 频谱跟随输出设备
     if (!selectedOutputDeviceId_.empty()) {
         // 关键：实例必须「带着 --mmdevice-audio-device 创建」，aout 建出来才会用指定设备。
         // 建成之后再 setAudioOutputDevice 是无效的（VLC 3 只在 aout 创建时读设备）。
@@ -1261,6 +1262,8 @@ void App::refreshOutputDevices() {
 void App::applyOutputDevice(const std::string& id) {
     selectedOutputDeviceId_ = id;
     bili_.setSetting("audio.outputDevice", id);
+    // 频谱（音律条）要抓 App 自己的输出设备；系统默认设备在 App 切到别的设备后是静音的。
+    media::AudioSpectrum::setDevice(utf8ToWide(id));
     // VLC 3 对「播放中换设备」不可靠：aout 只在创建时读设备，运行中设置基本被忽略。
     // 这里直接按新设备重建整个 libvlc 实例（--mmdevice-audio-device），再回到原进度重新起播，
     // 保证声音真的换到新设备，而不是只在界面上显示换了。
@@ -1842,32 +1845,59 @@ void App::drawImmersive() {
     }
     ImGui::SetNextWindowPos(ImVec2(width * 0.5f, slideOffset + height * 0.5f), ImGuiCond_Always,
                             ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("沉浸输出设备", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("选择音频输出设备（切换后立即生效，会从当前位置续播）：");
+    // 样式：圆角 + 内边距 + 深色面板，和沉浸界面其它弹层统一
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, px(16));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(22), px(18)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, px(8));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(px(10), px(9)));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, px(10));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.09f, 0.09f, 0.11f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.05f, 0.05f, 0.07f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 0.10f));
+    ImGui::PushFont(Ui::GetFonts().body);
+    if (ImGui::BeginPopupModal("沉浸输出设备", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::TextUnformatted("音频输出设备");
+        ImGui::PushFont(Ui::GetFonts().small);
+        ImGui::TextDisabled("切换后立即生效，会从当前位置续播");
+        ImGui::PopFont();
         ImGui::Spacing();
-        ImGui::BeginChild("##imm_output_list", ImVec2(px(420), px(220)), ImGuiChildFlags_Borders);
-        if (ImGui::Selectable("默认设备（系统）", selectedOutputDeviceId_.empty())) {
-            applyOutputDevice(std::string());
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(10), px(8)));
+        ImGui::BeginChild("##imm_output_list", ImVec2(px(430), px(230)), ImGuiChildFlags_Borders);
+        const bool defaultSelected = selectedOutputDeviceId_.empty();
+        if (defaultSelected) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(Ui::Colors::Brand));
         }
+        if (ImGui::Selectable("默认设备（系统）", defaultSelected)) applyOutputDevice(std::string());
+        if (defaultSelected) ImGui::PopStyleColor();
         for (const auto& device : outputDevices_) {
             const bool deviceSelected = device.first == selectedOutputDeviceId_;
+            if (deviceSelected) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(Ui::Colors::Brand));
+            }
             if (ImGui::Selectable(Ui::DisplayText(device.second).c_str(), deviceSelected)) {
                 applyOutputDevice(device.first);
             }
+            if (deviceSelected) ImGui::PopStyleColor();
         }
         if (outputDevices_.empty()) {
             ImGui::TextDisabled("还没有枚举到设备（先播放一首歌，或点「刷新」）");
         }
         ImGui::EndChild();
+        ImGui::PopStyleVar();  // WindowPadding
         ImGui::Spacing();
-        if (ImGui::Button("刷新", ImVec2(px(110), px(32)))) refreshOutputDevices();
+        if (ImGui::Button("刷新", ImVec2(px(120), px(34)))) refreshOutputDevices();
         ImGui::SameLine();
-        if (ImGui::Button("关闭", ImVec2(px(110), px(32)))) {
+        if (ImGui::Button("关闭", ImVec2(px(120), px(34)))) {
             immersiveDeviceDialogRequested_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
+    ImGui::PopFont();
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(6);
 
     // ---------------- 主内容 ----------------
     const float coverSize = px(260);

@@ -45,6 +45,11 @@ std::thread gWorker;
 std::mutex gBandMutex;
 std::array<float, AudioSpectrum::kBands> gBands{};
 
+// App 指定的输出设备（空 = 系统默认）。和播放器保持一致，否则会抓到静音设备。
+std::mutex gDeviceMutex;
+std::wstring gPreferredDeviceId;
+std::atomic<bool> gRestartRequested{false};
+
 void publishBands(const std::array<float, AudioSpectrum::kBands>& bands) {
     std::lock_guard<std::mutex> lock(gBandMutex);
     gBands = bands;
@@ -65,6 +70,18 @@ std::wstring queryDefaultDeviceId(IMMDeviceEnumerator* enumerator) {
         device->Release();
     }
     return result;
+}
+
+std::wstring preferredDeviceId() {
+    std::lock_guard<std::mutex> lock(gDeviceMutex);
+    return gPreferredDeviceId;
+}
+
+// 当前应该采集的设备：App 指定了就用它，否则用系统默认。
+std::wstring effectiveDeviceId(IMMDeviceEnumerator* enumerator) {
+    const std::wstring preferred = preferredDeviceId();
+    if (!preferred.empty()) return preferred;
+    return queryDefaultDeviceId(enumerator);
 }
 
 // 原地基 2 FFT
@@ -192,8 +209,17 @@ bool runCaptureSession() {
         cleanup();
         return false;
     }
-    if (FAILED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)) ||
-        device == nullptr) {
+    // 优先采集 App 自己的输出设备；没有指定（或设备已不存在）才回退系统默认。
+    const std::wstring preferred = preferredDeviceId();
+    if (!preferred.empty()) {
+        enumerator->GetDevice(preferred.c_str(), &device);
+        if (device == nullptr) {
+            AppLog::warn("AudioSpectrum", "指定的输出设备不存在，回退系统默认设备");
+        }
+    }
+    if (device == nullptr &&
+        (FAILED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)) ||
+         device == nullptr)) {
         cleanup();
         return false;
     }
@@ -238,8 +264,8 @@ bool runCaptureSession() {
         cleanup();
         return false;
     }
-    // 记住当前绑定的默认设备，用于检测切换
-    const std::wstring currentDeviceId = queryDefaultDeviceId(enumerator);
+    // 记住当前绑定的设备，用于检测切换
+    const std::wstring currentDeviceId = effectiveDeviceId(enumerator);
     AppLog::info("AudioSpectrum", "频谱采集启动 " + std::to_string(channels) + "ch " +
                                       std::to_string(sampleRate) + "Hz " + std::to_string(bits) +
                                       "bit");
@@ -260,6 +286,10 @@ bool runCaptureSession() {
     uint64_t lastDeviceCheck = GetTickCount64();
 
     while (gRunning.load()) {
+        if (gRestartRequested.exchange(false)) {
+            AppLog::info("AudioSpectrum", "输出设备变化，重建频谱采集");
+            break;
+        }
         UINT32 packetFrames = 0;
         if (FAILED(captureClient->GetNextPacketSize(&packetFrames))) break;
         while (packetFrames > 0) {
@@ -307,7 +337,7 @@ bool runCaptureSession() {
         // 音律条会「没反应」。这里每秒比对一次默认设备，变了就重建采集会话。
         if (now - lastDeviceCheck >= 1000) {
             lastDeviceCheck = now;
-            const std::wstring latestDeviceId = queryDefaultDeviceId(enumerator);
+            const std::wstring latestDeviceId = effectiveDeviceId(enumerator);
             if (!latestDeviceId.empty() && latestDeviceId != currentDeviceId) {
                 AppLog::info("AudioSpectrum", "默认输出设备已切换，重建频谱采集");
                 break;
@@ -348,6 +378,7 @@ void runCapture() {
 
 void AudioSpectrum::start() {
     if (gRunning.exchange(true)) return;
+    gRestartRequested = false;  // 新会话会读取最新的 preferredDeviceId，不需要再重启
     {
         std::lock_guard<std::mutex> lock(gBandMutex);
         gBands.fill(0.0f);
@@ -358,6 +389,19 @@ void AudioSpectrum::start() {
 }
 
 void AudioSpectrum::stop() { gRunning = false; }
+
+void AudioSpectrum::setDevice(const std::wstring& deviceId) {
+    {
+        std::lock_guard<std::mutex> lock(gDeviceMutex);
+        if (gPreferredDeviceId == deviceId) return;
+        gPreferredDeviceId = deviceId;
+    }
+    gRestartRequested = true;
+    if (gRunning.load()) {
+        AppLog::info("AudioSpectrum", deviceId.empty() ? "频谱改为跟随系统默认设备"
+                                                       : "频谱输出设备变更，重建采集");
+    }
+}
 
 std::array<float, AudioSpectrum::kBands> AudioSpectrum::bands() {
     std::lock_guard<std::mutex> lock(gBandMutex);
