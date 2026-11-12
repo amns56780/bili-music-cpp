@@ -1834,11 +1834,15 @@ void App::drawImmersive() {
     }
 
     // ---------------- 输出设备弹窗（沉浸模式） ----------------
-    if (immersiveDeviceDialogRequested_) ImGui::OpenPopup("沉浸输出设备");
+    // 只在按钮点下的那一帧请求打开，之后交给 ImGui 自己管理；
+    // 否则每帧 OpenPopup 会让 Esc / 点外部都关不掉。
+    if (immersiveDeviceDialogRequested_) {
+        ImGui::OpenPopup("沉浸输出设备");
+        immersiveDeviceDialogRequested_ = false;
+    }
     ImGui::SetNextWindowPos(ImVec2(width * 0.5f, slideOffset + height * 0.5f), ImGuiCond_Always,
                             ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("沉浸输出设备", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        if (!immersiveDeviceDialogRequested_) ImGui::CloseCurrentPopup();
         ImGui::TextUnformatted("选择音频输出设备（切换后立即生效，会从当前位置续播）：");
         ImGui::Spacing();
         ImGui::BeginChild("##imm_output_list", ImVec2(px(420), px(220)), ImGuiChildFlags_Borders);
@@ -4142,9 +4146,12 @@ void App::draw() {
     // ================= 动作分发 =================
     if (sidebarActions.selectPlaylist) selectPlaylist(sidebarActions.playlistId);
     if (sidebarActions.reorderPlaylist && sidebarActions.reorderPlaylistId >= 0) {
+        pushUndo("调整歌单顺序");
         if (store_.movePlaylist(sidebarActions.reorderPlaylistId,
                                 sidebarActions.reorderPlaylistIndex)) {
             setStatus("已调整歌单顺序");
+        } else {
+            undoStack_.pop_back();  // 位置没变：不留下空撤销点
         }
     }
     if (sidebarActions.createPlaylist) openCreatePlaylistDialog();
@@ -4210,8 +4217,11 @@ void App::draw() {
         for (long long songId : pageActions.selectionIds) selectedSongIds_.insert(songId);
     }
     if (pageActions.reorderSong && pageActions.reorderSongId >= 0) {
+        pushUndo("调整曲目顺序");
         if (store_.moveSongWithinPlaylist(pageActions.reorderSongId, pageActions.reorderSongIndex)) {
             setStatus("已调整曲目顺序");
+        } else {
+            undoStack_.pop_back();  // 位置没变：不留下空撤销点
         }
     }
     if (pageActions.copySelected) {
