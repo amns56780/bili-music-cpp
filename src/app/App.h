@@ -405,6 +405,8 @@ private:
     std::string immersiveBgPath_;
     bool immersiveShowWave_ = true;
     bool immersiveVolumeOpen_ = false;
+    float immersiveVolumeAnim_ = 0.0f;       // 音量条悬停展开动画（0..1）
+    uint64_t immersiveVolumeLeaveTick_ = 0;  // 鼠标离开音量区的时刻（延迟收起）
     bool immersiveBgMenuOpen_ = false;
     bool immersiveDeviceDialogRequested_ = false;  // 沉浸模式下的「输出设备」弹窗
     uint64_t immersiveEnteredTick_ = 0;

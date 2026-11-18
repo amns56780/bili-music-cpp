@@ -1718,11 +1718,9 @@ void App::drawImmersive() {
         immersiveModeTipUntil_ = GetTickCount64() + 2000;
         setStatus("播放模式：" + immersiveModeTip_);
     }
-    if (roundButton("imm_volume", volumeIcon, volumeX, btnY, btnSize, px(20), immersiveVolumeOpen_,
-                    buttonBackground)) {
-        immersiveVolumeOpen_ = !immersiveVolumeOpen_;
-        immersiveBgMenuOpen_ = false;
-    }
+    // 音量按钮：悬停自动展开（不再用点击切换，见下方音量条逻辑）
+    roundButton("imm_volume", volumeIcon, volumeX, btnY, btnSize, px(20),
+                immersiveVolumeAnim_ > 0.5f, buttonBackground);
     if (roundButton("imm_bg", Icons::Settings, settingsX, btnY, btnSize, px(20), immersiveBgMenuOpen_,
                     buttonBackground)) {
         immersiveBgMenuOpen_ = !immersiveBgMenuOpen_;
@@ -1733,21 +1731,58 @@ void App::drawImmersive() {
         closeImmersive();
     }
 
-    // ---------------- 音量弹层 ----------------
-    if (immersiveVolumeOpen_) {
-        const float panelW = px(280);
-        const float panelH = px(46);
-        const ImVec2 pMin(width - px(20) - panelW, slideOffset + px(72));
-        const ImVec2 pMax(pMin.x + panelW, pMin.y + panelH);
-        draw->AddRectFilled(pMin, pMax, fade(IM_COL32(0x1C, 0x1C, 0x22, 0xEE)), px(12));
+    // ---------------- 音量弹层（悬停展开 + 滑入/淡出动画） ----------------
+    // 鼠标停在音量按钮上 → 音量条滑出；可直接移到音量条上拖动/滚轮；离开后延迟收起。
+    // 「悬停桥」覆盖按钮与音量条之间的空隙：鼠标经过空白时不算离开，避免反复开合。
+    const ImVec2 volumeMouse = io.MousePos;
+    const float panelW = px(280);
+    const float panelH = px(46);
+    const ImVec2 pMin(width - px(20) - panelW, slideOffset + px(72));
+    const ImVec2 pMax(pMin.x + panelW, pMin.y + panelH);
+    const bool onVolumeButton = volumeMouse.x >= volumeX && volumeMouse.x <= volumeX + btnSize &&
+                                volumeMouse.y >= btnY && volumeMouse.y <= btnY + btnSize;
+    const bool onVolumeBridge = volumeMouse.x >= pMin.x && volumeMouse.x <= pMax.x &&
+                                volumeMouse.y >= btnY + btnSize && volumeMouse.y <= pMin.y;
+    const bool onVolumePanel = volumeMouse.x >= pMin.x && volumeMouse.x <= pMax.x &&
+                               volumeMouse.y >= pMin.y && volumeMouse.y <= pMax.y;
+    const bool volumePanelShown = immersiveVolumeAnim_ > 0.01f;
+    const bool hoveringVolume =
+        onVolumeButton || (volumePanelShown && (onVolumeBridge || onVolumePanel));
+    if (hoveringVolume) {
+        immersiveVolumeLeaveTick_ = 0;
+    } else if (volumePanelShown && immersiveVolumeLeaveTick_ == 0) {
+        immersiveVolumeLeaveTick_ = GetTickCount64();
+    }
+    // 离开后延迟 220ms 再收：鼠标从按钮移向音量条途中短暂经过空白也不会打断；
+    // 只有「当前已经展开」才享受延迟，避免收起后又被旧计时器重新打开。
+    const bool volumeTarget =
+        hoveringVolume ||
+        (immersiveVolumeAnim_ > 0.001f && immersiveVolumeLeaveTick_ != 0 &&
+         GetTickCount64() - immersiveVolumeLeaveTick_ < 220);
+    const float volumeStep = std::min(1.0f, io.DeltaTime * 14.0f);
+    if (volumeTarget) {
+        immersiveVolumeAnim_ = std::min(1.0f, immersiveVolumeAnim_ + volumeStep);
+    } else {
+        immersiveVolumeAnim_ = std::max(0.0f, immersiveVolumeAnim_ - volumeStep);
+    }
+    immersiveVolumeOpen_ = immersiveVolumeAnim_ > 0.01f;
+
+    if (immersiveVolumeAnim_ > 0.001f) {
+        const float ease = 1.0f - std::pow(1.0f - immersiveVolumeAnim_, 3.0f);  // easeOutCubic
+        const float slide = (1.0f - ease) * px(12);
+        const ImVec2 qMin(pMin.x, pMin.y - slide);
+        const ImVec2 qMax(pMax.x, pMax.y - slide);
+        const float panelAlpha = ease * anim;
+        draw->AddRectFilled(qMin, qMax,
+                            fadeImColor(IM_COL32(0x1C, 0x1C, 0x22, 0xEE), panelAlpha), px(12));
         const std::string glyph = Icons::Utf8(volumeIcon);
         draw->AddText(Ui::GetFonts().body, px(18),
-                      ImVec2(pMin.x + px(14), pMin.y + panelH * 0.5f - px(18) * 0.325f),
-                      fade(IM_COL32(255, 255, 255, 255)), glyph.c_str());
+                      ImVec2(qMin.x + px(14), qMin.y + panelH * 0.5f - px(18) * 0.325f),
+                      fadeImColor(IM_COL32(255, 255, 255, 255), panelAlpha), glyph.c_str());
         float value = volume_ / 100.0f;
         bool volumeChanged = false;
         const bool volumeFinished =
-            slider("##imm_volume_slider", pMin.x + px(46), pMin.y + panelH * 0.5f - px(7),
+            slider("##imm_volume_slider", qMin.x + px(46), qMin.y + panelH * 0.5f - px(7),
                    panelW - px(46) - px(52), &value, px(4), &volumeChanged);
         if (volumeChanged) {
             volume_ = (int)std::lround(value * 100.0f);
@@ -1759,23 +1794,9 @@ void App::drawImmersive() {
         std::snprintf(volumeText, sizeof(volumeText), "%d", volume_);
         const float volumeTextWidth = Ui::MeasureText(Ui::GetFonts().small, px(15), volumeText);
         draw->AddText(Ui::GetFonts().small, px(15),
-                      ImVec2(pMax.x - px(14) - volumeTextWidth,
-                             pMin.y + panelH * 0.5f - px(15) * 0.55f),
-                      fade(IM_COL32(255, 255, 255, 0xCC)), volumeText);
-    }
-
-    // 点击音量面板外任意位置即隐藏（用户反馈：原先必须再点一次音量按钮）
-    if (immersiveVolumeOpen_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const ImVec2 mouse = ImGui::GetIO().MousePos;
-        const ImVec2 volumePanelMin(width - px(20) - px(280), slideOffset + px(72));
-        const ImVec2 volumePanelMax(volumePanelMin.x + px(280), volumePanelMin.y + px(46));
-        const bool inVolumePanel = mouse.x >= volumePanelMin.x && mouse.x <= volumePanelMax.x &&
-                                   mouse.y >= volumePanelMin.y && mouse.y <= volumePanelMax.y;
-        const bool onVolumeButton = mouse.x >= volumeX && mouse.x <= volumeX + btnSize &&
-                                    mouse.y >= btnY && mouse.y <= btnY + btnSize;
-        if (!inVolumePanel && !onVolumeButton) {
-            immersiveVolumeOpen_ = false;
-        }
+                      ImVec2(qMax.x - px(14) - volumeTextWidth,
+                             qMin.y + panelH * 0.5f - px(15) * 0.55f),
+                      fadeImColor(IM_COL32(255, 255, 255, 0xCC), panelAlpha), volumeText);
     }
 
     // ---------------- 背景设置弹层 ----------------
@@ -2039,8 +2060,9 @@ void App::drawImmersive() {
         }
     }
 
-    // 滚轮微调音量（沉浸模式里没有常驻音量条）
-    if (io.MouseWheel != 0.0f) {
+    // 滚轮微调音量：只在鼠标位于音量按钮 / 弹出音量条 / 悬停桥内时生效
+    // （之前沉浸界面任意位置滚轮都会改音量，用户反馈误触）
+    if (io.MouseWheel != 0.0f && hoveringVolume) {
         const int next = std::max(0, std::min(100, volume_ + (int)std::lround(io.MouseWheel)));
         if (next != volume_) {
             volume_ = next;
