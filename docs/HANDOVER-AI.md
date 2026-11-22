@@ -129,6 +129,8 @@ release notes 固定结构：本版修复/新增 -> 根因与实测日志 -> 下
 
 音量不经过 VLC：AppVolume（WASAPI ISimpleAudioVolume）直接写应用会话；VlcEngine::pumpVolume() 每帧自愈（VLC 换曲会把会话音量重置）。
 
+注意：同一设备上可能同时挂着本进程的**多个**会话（VLC 重建音频输出会残留旧会话）。AppVolume 会绑定并**同时写入该设备上的全部会话**——只绑一个会绑到不出声的那个，表现就是「音量条拖了没反应，声音一直 100%」。
+
 ### 4.3 数据落盘
 
 LibraryStore::save() 写 C:/Users/amns2333/.bilimusic/playlists.json，**与 Java 版共用**：字段名与可空写法必须保持一致，否则两端互相踩。
@@ -197,6 +199,14 @@ LibraryStore::save() 写 C:/Users/amns2333/.bilimusic/playlists.json，**与 Jav
 
 - tools/tmp/shot3.ps1 用 GetWindowRect 取窗口矩形，点击点 = rect + (x,y)；**截图坐标与点击坐标在部分区域存在约 32px 垂直偏差**（实测点侧栏行要 +32 才准）。
 - 教训：每次点击后**必须再截图确认状态变了**，点「删除 / 卸载」这类按钮前更要确认；曾误点打开卸载确认框（已取消，无损失）。
+
+### 6.7 音量条拖了没反应（同设备残留双会话）
+
+- 现象：暂停几小时 / 切过输出设备后，拖动音量条数字在变，但声音大小不受控。
+- 排查：`tools/tmp/sessdump.exe` 打印本进程全部音频会话 —— 同一耳机设备上出现两个会话：一个 3%、一个 100%。AppVolume 只绑了其中一个（不出声的），真正的输出会话一直是 100%。
+- 修法：AppVolume 绑定该设备上本进程的**全部**会话，调音量时对所有会话同时下发并逐个读回纠偏；会话失效/切设备时整组重枚举。
+- 验证：`tools/tmp/twosess_test.cpp` 做 A→B→A 切换复现双会话，两个会话都写到目标值；另可把会话强制改成 100% 观察 pumpVolume 纠回。
+- 教训：不要假设「一个进程一条设备一个会话」；VLC 重建 aout 会留下旧会话。
 
 ---
 
@@ -268,6 +278,8 @@ sourceType 语义：FAV（收藏夹）/ TOVIEW（稍后再看）/ UPLOAD（UP主
 | mkjava_link_exact.py / mkdup_link.py | 用 Python 复刻 Java 端 zlib 编码，造测试链接 |
 | devicetest.cpp/.exe | 直接驱动 VlcEngine 验证输出设备切换（打印 WASAPI 会话所在设备） |
 | sessprobe.cpp/.exe | 观察换曲时 WASAPI 会话的音量/状态/峰值；可强制把会话改成 1.0 量测 pumpVolume 纠正延迟。启动即静音默认端点，`sessprobe.exe unmute` 恢复 |
+| sessdump.cpp/.exe | 只读打印所有音频会话（pid / 设备 / 状态 / 音量），排查「音量写错会话」 |
+| twosess_test.cpp/.exe | A→B→A 切换复现同设备双会话，验证音量是否写入全部会话 |
 | shot3.ps1 | 置顶 + 截图 + 点击（-clickX -clickY，注意 32px 偏差） |
 | dbl2.ps1 | 双击指定坐标 |
 
