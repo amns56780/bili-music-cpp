@@ -103,10 +103,17 @@ bool AppVolume::init() {
     return true;
 }
 
+void AppVolume::releaseSessions() {
+    for (BoundSession& bound : sessions_) {
+        safeRelease(bound.volume);
+        safeRelease(bound.control);
+        safeRelease(bound.meter);
+    }
+    sessions_.clear();
+}
+
 void AppVolume::shutdown() {
-    safeRelease(sessionControl_);
-    safeRelease(meter_);
-    safeRelease(sessionVolume_);
+    releaseSessions();
     safeRelease(sessionManager_);
     safeRelease(device_);
     safeRelease(enumerator_);
@@ -117,33 +124,29 @@ void AppVolume::shutdown() {
 }
 
 bool AppVolume::refresh() {
-    if (sessionVolume_ == nullptr || sessionControl_ == nullptr) {
-        return ensureSession();
-    }
-    AudioSessionState state = AudioSessionStateExpired;
-    const bool stateOk = SUCCEEDED(sessionControl_->GetState(&state));
-    if (stateOk && state != AudioSessionStateExpired) {
-        // 会话有效：Inactive 在「暂停」时是正常的（本机 VLC 播放中也可能报 Inactive）。
-        // 旧实现把 Inactive 当成“可能换了设备”而每 500ms 重扫重绑：暂停时日志刷屏，
-        // 音量不断被 reset，表现出来就是暂停切设备后音量调不动。
-        // 只有「App 指定的输出设备 ≠ 当前绑定设备」时才需要重扫。
-        if (targetDeviceId_.empty() || sameDeviceId(targetDeviceId_, boundDeviceId_)) return true;
+    if (sessions_.empty()) return ensureSession();
+    // 目标设备变了（App 热切换输出设备）：限频重扫
+    if (!targetDeviceId_.empty() && !sameDeviceId(targetDeviceId_, boundDeviceId_)) {
         const uint64_t now = GetTickCount64();
         if (now - lastActiveCheckTick_ < 500) return true;
         lastActiveCheckTick_ = now;
-        safeRelease(sessionControl_);
-        safeRelease(meter_);
-        safeRelease(sessionVolume_);
+        releaseSessions();
         lastRetryTick_ = 0;
         return ensureSession();
     }
-    // Expired：释放并重新绑定
-    safeRelease(sessionControl_);
-    safeRelease(meter_);
-    safeRelease(sessionVolume_);
-    lastRetryTick_ = 0;
-    AppLog::info("AppVolume", "音频会话已失效，重新绑定");
-    return ensureSession();
+    for (const BoundSession& bound : sessions_) {
+        AudioSessionState state = AudioSessionStateExpired;
+        const bool stateOk =
+            bound.control != nullptr && SUCCEEDED(bound.control->GetState(&state));
+        if (!stateOk || state == AudioSessionStateExpired) {
+            // Inactive 在「暂停」时是正常的，不重绑；Expired 才需要重新枚举。
+            releaseSessions();
+            lastRetryTick_ = 0;
+            AppLog::info("AppVolume", "音频会话已失效，重新绑定");
+            return ensureSession();
+        }
+    }
+    return true;
 }
 
 std::string AppVolume::findSessionDeviceId() {
@@ -209,7 +212,7 @@ std::string AppVolume::findSessionDeviceId() {
 }
 
 bool AppVolume::ensureSession() {
-    if (sessionVolume_ != nullptr) return true;
+    if (!sessions_.empty()) return true;
     if (enumerator_ == nullptr) return false;
 
     // 新音频会话（换曲/换输出设备）会话音量由系统重置为 100%，
@@ -316,48 +319,49 @@ bool AppVolume::ensureSession() {
     }
     collection->Release();
 
-    int best = -1;
+    // 注意：同一条设备上可能同时存在本进程的两个会话（VLC 重建音频输出后旧会话可能残留），
+    // 只挑一个会挑到“不出声”的那个：音量写进去没效果。这里把该设备上的会话全部绑定。
     const bool explicitTarget = !targetDeviceId_.empty();
+    std::vector<int> picked;
     if (!target.empty()) {
         for (size_t i = 0; i < candidates.size(); ++i) {
-            if (sameDeviceId(candidates[i].deviceId, target)) {
-                if (best < 0 || candidates[i].state < candidates[(size_t)best].state) {
-                    best = (int)i;
-                }
-            }
+            if (sameDeviceId(candidates[i].deviceId, target)) picked.push_back((int)i);
         }
     }
-    if (best < 0 && !explicitTarget) {
-        // 只有“跟随系统默认设备”时才允许兜底到别的端点；
-        // App 指定了设备（切设备后）就必须严格绑到那台，否则会绑回旧设备的会话。
+    if (picked.empty() && !explicitTarget) {
+        // 跟随默认设备：默认设备没有会话时兜底（优先 Active，其次任意）
         for (size_t i = 0; i < candidates.size(); ++i) {
-            if (candidates[i].state == (int)AudioSessionStateActive) {
-                best = (int)i;
-                break;
-            }
+            if (candidates[i].state == (int)AudioSessionStateActive) picked.push_back((int)i);
         }
-        if (best < 0 && !candidates.empty()) best = 0;
+        if (picked.empty()) {
+            for (size_t i = 0; i < candidates.size(); ++i) picked.push_back((int)i);
+        }
     }
-    if (best < 0) {
-        for (size_t i = 0; i < candidates.size(); ++i) {
-            if (candidates[i].volume != nullptr) candidates[i].volume->Release();
-            if (candidates[i].control != nullptr) candidates[i].control->Release();
-            if (candidates[i].meter != nullptr) candidates[i].meter->Release();
+    if (picked.empty()) {
+        for (Candidate& candidate : candidates) {
+            if (candidate.volume != nullptr) candidate.volume->Release();
+            if (candidate.control != nullptr) candidate.control->Release();
+            if (candidate.meter != nullptr) candidate.meter->Release();
         }
         return false;
     }
 
+    std::vector<bool> keep(candidates.size(), false);
+    for (int index : picked) keep[(size_t)index] = true;
+    releaseSessions();
     for (size_t i = 0; i < candidates.size(); ++i) {
-        if ((int)i == best) continue;
-        if (candidates[i].volume != nullptr) candidates[i].volume->Release();
-        if (candidates[i].control != nullptr) candidates[i].control->Release();
-        if (candidates[i].meter != nullptr) candidates[i].meter->Release();
+        if (!keep[i]) {
+            if (candidates[i].volume != nullptr) candidates[i].volume->Release();
+            if (candidates[i].control != nullptr) candidates[i].control->Release();
+            if (candidates[i].meter != nullptr) candidates[i].meter->Release();
+            continue;
+        }
+        sessions_.push_back(BoundSession{candidates[i].volume, candidates[i].control,
+                                         candidates[i].meter});
     }
-    sessionVolume_ = candidates[(size_t)best].volume;
-    sessionControl_ = candidates[(size_t)best].control;
-    meter_ = candidates[(size_t)best].meter;
-    boundDeviceId_ = candidates[(size_t)best].deviceId;
-    AppLog::info("AppVolume", "已接入 WASAPI 应用级音量（设备 " + boundDeviceId_ + "）");
+    boundDeviceId_ = candidates[(size_t)picked.front()].deviceId;
+    AppLog::info("AppVolume", "已接入 WASAPI 应用级音量（设备 " + boundDeviceId_ + "，" +
+                                  std::to_string(sessions_.size()) + " 个会话）");
     return true;
 }
 
@@ -388,9 +392,7 @@ bool AppVolume::setDevice(const std::wstring& endpointId) {
     // 记下目标设备：热切换后要严格绑到这台设备上的会话。
     // （旧设备的会话可能还残留着 Active，只按状态挑会写回旧设备，新设备音量就调不动。）
     targetDeviceId_ = wideToUtf8Local(endpointId.c_str());
-    safeRelease(sessionControl_);
-    safeRelease(meter_);
-    safeRelease(sessionVolume_);
+    releaseSessions();
     lastRetryTick_ = 0;
     lastActiveCheckTick_ = 0;
     return ensureSession();
@@ -400,36 +402,43 @@ bool AppVolume::setVolume(int percent, bool force) {
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
     if (!ensureSession()) return false;
     const float target = uiToLevel(clamped);
-    if (!force) {
+    int before = -1;
+    for (BoundSession& bound : sessions_) {
+        if (bound.volume == nullptr) continue;
+        float level = 0.0f;
+        const bool haveLevel = SUCCEEDED(bound.volume->GetMasterVolume(&level));
         // 读回真实电平而不是只比缓存：系统在换曲 / 会话重建时可能把音量改回 100%，
         // 必须按真实值判断，否则会漏掉这种“被外部改掉”的情况。
-        float level = 0.0f;
-        if (SUCCEEDED(sessionVolume_->GetMasterVolume(&level)) &&
-            std::fabs(level - target) < 0.0002f) {
-            lastVolume_ = clamped;
-            return true;
-        }
+        if (!force && haveLevel && std::fabs(level - target) < 0.0002f) continue;
+        if (!force && before < 0 && haveLevel) before = levelToUi(level);
+        bound.volume->SetMasterVolume(target, nullptr);
     }
-    if (FAILED(sessionVolume_->SetMasterVolume(target, nullptr))) return false;
+    if (!force && before >= 0 && (before - clamped > 1 || clamped - before > 1)) {
+        AppLog::info("AppVolume", "会话音量被重置为 " + std::to_string(before) + "%（应为 " +
+                                      std::to_string(clamped) + "%），已纠正");
+    }
     if (lastVolume_ != clamped) {
-        AppLog::info("AppVolume", "应用级音量 -> " + std::to_string(clamped) + "%");
+        lastVolume_ = clamped;
+        if (force) AppLog::info("AppVolume", "应用级音量 -> " + std::to_string(clamped) + "%");
     }
-    lastVolume_ = clamped;
     return true;
 }
 
 int AppVolume::volume() const {
-    if (sessionVolume_ == nullptr) return -1;
+    if (sessions_.empty() || sessions_.front().volume == nullptr) return -1;
     float level = 0.0f;
-    if (FAILED(sessionVolume_->GetMasterVolume(&level))) return -1;
+    if (FAILED(sessions_.front().volume->GetMasterVolume(&level))) return -1;
     return levelToUi(level);
 }
 
 float AppVolume::peak() const {
-    if (meter_ == nullptr) return -1.0f;
-    float value = 0.0f;
-    if (FAILED(meter_->GetPeakValue(&value))) return -1.0f;
-    return value;
+    float best = -1.0f;
+    for (const BoundSession& bound : sessions_) {
+        if (bound.meter == nullptr) continue;
+        float value = 0.0f;
+        if (SUCCEEDED(bound.meter->GetPeakValue(&value)) && value > best) best = value;
+    }
+    return best;
 }
 
 }  // namespace media

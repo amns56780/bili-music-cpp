@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct IMMDevice;
 struct IMMDeviceEnumerator;
@@ -24,7 +25,7 @@ public:
     bool init();
     void shutdown();
 
-    bool available() const { return sessionVolume_ != nullptr; }
+    bool available() const { return !sessions_.empty(); }
 
     // percent: 0..100；force=true 时即使数值没变也强制下发（防止 VLC 自己把会话音量改回去）
     bool setVolume(int percent, bool force = false);
@@ -52,15 +53,22 @@ public:
     std::string findSessionDeviceId();
 
 private:
+    // 同一个进程可能在同一条设备上留下多个音频会话（VLC 重建音频输出后旧会话可能还挂着）。
+    // 只绑一个会绑到“不出声”的那个，音量写进去没效果 —— 所以全部绑定、全部下发。
+    struct BoundSession {
+        ISimpleAudioVolume* volume = nullptr;
+        IAudioSessionControl2* control = nullptr;
+        IAudioMeterInformation* meter = nullptr;
+    };
+
     bool ensureSession();
+    void releaseSessions();
 
     bool comInitialized_ = false;
     IMMDeviceEnumerator* enumerator_ = nullptr;
     IMMDevice* device_ = nullptr;
     IAudioSessionManager2* sessionManager_ = nullptr;
-    ISimpleAudioVolume* sessionVolume_ = nullptr;
-    IAudioMeterInformation* meter_ = nullptr;
-    IAudioSessionControl2* sessionControl_ = nullptr;
+    std::vector<BoundSession> sessions_;
     int lastVolume_ = -1;
     uint64_t lastRetryTick_ = 0;
     uint64_t lastActiveCheckTick_ = 0;

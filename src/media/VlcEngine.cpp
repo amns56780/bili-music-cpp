@@ -624,7 +624,6 @@ void VlcEngine::pumpVolume() {
         // 每帧都读回真实会话音量，只有不一致时才写（写动作本身才会产生可闻跳变）。
         // 旧实现每 250ms 才检查一次：换曲后系统把会话音量重置回 100% 时，
         // 最长会有 250ms 的「突然变响」——用户听到的换曲炸音就是它。
-        const int before = appVolume_.volume();
         const bool forced = !volumeApplied_ || volumeDirty_;
         if (!appVolume_.setVolume(volume_, forced)) return;
         if (forced) {
@@ -638,9 +637,6 @@ void VlcEngine::pumpVolume() {
             }
             volumeApplied_ = true;
             volumeDirty_ = false;
-        } else if (before >= 0 && (before - volume_ > 1 || volume_ - before > 1)) {
-            AppLog::info("AppVolume", "会话音量被重置为 " + std::to_string(before) + "%（应为 " +
-                                          std::to_string(volume_) + "%），已纠正");
         }
         return;
     }
