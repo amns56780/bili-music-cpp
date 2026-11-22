@@ -231,6 +231,9 @@ private:
     double positionMs_ = 0.0;
     double durationMs_ = 0.0;
     bool playing_ = false;
+    bool pendingRestartOnPlay_ = false;  // 暂停时切了输出设备：下次继续播放要按新设备重新起播
+    double pausedSwitchPositionMs_ = 0.0;  // 暂停切设备时保存的进度（引擎被重建后要保留显示）
+    double pausedSwitchDurationMs_ = 0.0;  // 暂停切设备时保存的时长
     bool hasMedia_ = false;
 
     // 音质档位（0=自动）与在线播放的当前流信息（用于备用地址/过期重取）

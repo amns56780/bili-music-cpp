@@ -515,6 +515,7 @@ void App::startLoginCheck() {
 
 void App::startOnlinePlayFor(long long songId, const std::string& bvid, long long cid,
                             const std::string& title, const std::string& artist) {
+    pendingRestartOnPlay_ = false;
     autoNextHandledSongId_ = -1;
     playingSongId_ = songId;
     playingTitle_ = title;
@@ -1134,9 +1135,17 @@ void App::checkTrackEnd() {
 }
 
 void App::syncPlaybackState() {
-    hasMedia_ = engine_.ready() && engine_.lengthMs() > 0;
-    positionMs_ = engine_.ready() ? (double)engine_.positionMs() : 0.0;
-    durationMs_ = engine_.ready() ? (double)engine_.lengthMs() : 0.0;
+    if (pendingRestartOnPlay_) {
+        // 暂停时切了输出设备：引擎已经重建、暂时没有播放器，但曲目还在，
+        // 进度/时长不能清掉，否则界面会跳回 0:00，继续播放也没法回到原位。
+        hasMedia_ = true;
+        positionMs_ = pausedSwitchPositionMs_;
+        durationMs_ = pausedSwitchDurationMs_;
+    } else {
+        hasMedia_ = engine_.ready() && engine_.lengthMs() > 0;
+        positionMs_ = engine_.ready() ? (double)engine_.positionMs() : 0.0;
+        durationMs_ = engine_.ready() ? (double)engine_.lengthMs() : 0.0;
+    }
     const bool enginePlaying = engine_.ready() && engine_.isPlaying();
     if (GetTickCount64() >= playbackOverrideUntil_) {
         playing_ = enginePlaying;
@@ -1273,6 +1282,7 @@ void App::applyOutputDevice(const std::string& id) {
     // 实测结论：同一进程里一旦建过 aout，后续换设备（无论 device_set 还是 media 选项）都会被 VLC 忽略，
     // 只有「按新设备重建 libvlc 实例 + 重新起播」能真正换过去。
     const bool wasPlayingTrack = playingSongId_ >= 0;
+    const bool wasPaused = wasPlayingTrack && !playing_;
     const double resumeAt = wasPlayingTrack && hasMedia_ ? positionMs_ : -1.0;
     deviceInUseId_.clear();
     deviceInUseTick_ = 0;
@@ -1281,11 +1291,21 @@ void App::applyOutputDevice(const std::string& id) {
         return;
     }
     if (wasPlayingTrack) {
-        // 走正常的起播路径，保证新的 aout 一定被创建出来
-        pendingSeekMs_ = resumeAt >= 0.0 ? resumeAt : -1.0;
-        startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
-        AppLog::info("App", "切换输出设备后重建实例并重新起播，回到 " +
-                                std::to_string((int)(resumeAt >= 0.0 ? resumeAt : 0.0)) + "ms");
+        if (wasPaused) {
+            // 暂停中切设备：只重建实例，不自动起播（之前无条件重新起播，暂停的歌会自己放起来）。
+            // 继续播放时再按新设备起播，并回到原来的进度。
+            pendingRestartOnPlay_ = true;
+            pausedSwitchPositionMs_ = resumeAt >= 0.0 ? resumeAt : positionMs_;
+            pausedSwitchDurationMs_ = durationMs_;
+            AppLog::info("App", "切换输出设备：当前处于暂停，保持暂停（继续播放时按新设备起播，回到 " +
+                                    std::to_string((int)pausedSwitchPositionMs_) + "ms）");
+        } else {
+            // 走正常的起播路径，保证新的 aout 一定被创建出来
+            pendingSeekMs_ = resumeAt >= 0.0 ? resumeAt : -1.0;
+            startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
+            AppLog::info("App", "切换输出设备后重建实例并重新起播，回到 " +
+                                    std::to_string((int)(resumeAt >= 0.0 ? resumeAt : 0.0)) + "ms");
+        }
     }
     std::string name = "默认设备";
     for (const auto& device : outputDevices_) {
@@ -2088,6 +2108,15 @@ void App::togglePlayback() {
     AppLog::info("App", "切换播放/暂停（托盘或全局媒体键）");
     if (!hasMedia_) {
         playFirstPlayable();
+        return;
+    }
+    if (pendingRestartOnPlay_) {
+        // 暂停时切了输出设备：实例已按新设备重建，第一次继续播放时重新起播到原进度
+        pendingRestartOnPlay_ = false;
+        pendingSeekMs_ = pausedSwitchPositionMs_ >= 0.0 ? pausedSwitchPositionMs_ : -1.0;
+        playing_ = true;
+        playbackOverrideUntil_ = GetTickCount64() + 450;
+        startOnlinePlayFor(playingSongId_, curBvid_, curCid_, playingTitle_, playingArtist_);
         return;
     }
     const bool wasPlaying = engine_.isPlaying();

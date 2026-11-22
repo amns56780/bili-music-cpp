@@ -122,21 +122,27 @@ bool AppVolume::refresh() {
     }
     AudioSessionState state = AudioSessionStateExpired;
     const bool stateOk = SUCCEEDED(sessionControl_->GetState(&state));
-    const bool expired = !stateOk || state == AudioSessionStateExpired;
-    const uint64_t now = GetTickCount64();
-    if (!expired && state == AudioSessionStateActive &&
-        (targetDeviceId_.empty() || sameDeviceId(targetDeviceId_, boundDeviceId_))) {
-        return true;
+    if (stateOk && state != AudioSessionStateExpired) {
+        // 会话有效：Inactive 在「暂停」时是正常的（本机 VLC 播放中也可能报 Inactive）。
+        // 旧实现把 Inactive 当成“可能换了设备”而每 500ms 重扫重绑：暂停时日志刷屏，
+        // 音量不断被 reset，表现出来就是暂停切设备后音量调不动。
+        // 只有「App 指定的输出设备 ≠ 当前绑定设备」时才需要重扫。
+        if (targetDeviceId_.empty() || sameDeviceId(targetDeviceId_, boundDeviceId_)) return true;
+        const uint64_t now = GetTickCount64();
+        if (now - lastActiveCheckTick_ < 500) return true;
+        lastActiveCheckTick_ = now;
+        safeRelease(sessionControl_);
+        safeRelease(meter_);
+        safeRelease(sessionVolume_);
+        lastRetryTick_ = 0;
+        return ensureSession();
     }
-    // Inactive（本机实测状态不可靠，播放中也常报 Inactive）/ 设备不匹配 / Expired：
-    // 限频重扫，按「目标设备精确匹配 + Active 兜底」重新挑会话。
-    if (!expired && now - lastActiveCheckTick_ < 500) return true;
-    lastActiveCheckTick_ = now;
+    // Expired：释放并重新绑定
     safeRelease(sessionControl_);
     safeRelease(meter_);
     safeRelease(sessionVolume_);
     lastRetryTick_ = 0;
-    if (expired) AppLog::info("AppVolume", "音频会话已失效，重新绑定");
+    AppLog::info("AppVolume", "音频会话已失效，重新绑定");
     return ensureSession();
 }
 
@@ -311,6 +317,7 @@ bool AppVolume::ensureSession() {
     collection->Release();
 
     int best = -1;
+    const bool explicitTarget = !targetDeviceId_.empty();
     if (!target.empty()) {
         for (size_t i = 0; i < candidates.size(); ++i) {
             if (sameDeviceId(candidates[i].deviceId, target)) {
@@ -320,16 +327,25 @@ bool AppVolume::ensureSession() {
             }
         }
     }
-    if (best < 0) {
+    if (best < 0 && !explicitTarget) {
+        // 只有“跟随系统默认设备”时才允许兜底到别的端点；
+        // App 指定了设备（切设备后）就必须严格绑到那台，否则会绑回旧设备的会话。
         for (size_t i = 0; i < candidates.size(); ++i) {
             if (candidates[i].state == (int)AudioSessionStateActive) {
                 best = (int)i;
                 break;
             }
         }
+        if (best < 0 && !candidates.empty()) best = 0;
     }
-    if (best < 0 && !candidates.empty()) best = 0;
-    if (best < 0) return false;
+    if (best < 0) {
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            if (candidates[i].volume != nullptr) candidates[i].volume->Release();
+            if (candidates[i].control != nullptr) candidates[i].control->Release();
+            if (candidates[i].meter != nullptr) candidates[i].meter->Release();
+        }
+        return false;
+    }
 
     for (size_t i = 0; i < candidates.size(); ++i) {
         if ((int)i == best) continue;
