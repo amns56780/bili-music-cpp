@@ -63,12 +63,16 @@ private:
 
     bool ensureSession();
     void releaseSessions();
+    std::string defaultDeviceId();
+    std::vector<std::string> collectSessionIds(const std::string& targetDeviceId);
 
     bool comInitialized_ = false;
     IMMDeviceEnumerator* enumerator_ = nullptr;
     IMMDevice* device_ = nullptr;
     IAudioSessionManager2* sessionManager_ = nullptr;
     std::vector<BoundSession> sessions_;
+    std::vector<std::string> boundSessionIds_;  // 当前绑定的会话标识（用于发现新出现的会话）
+    uint64_t lastSessionSetCheckTick_ = 0;
     int lastVolume_ = -1;
     uint64_t lastRetryTick_ = 0;
     uint64_t lastActiveCheckTick_ = 0;
