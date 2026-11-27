@@ -126,15 +126,21 @@ void AppVolume::shutdown() {
 
 bool AppVolume::refresh() {
     if (sessions_.empty()) return ensureSession();
-    // 目标设备变了（App 热切换输出设备）：限频重扫
-    if (!targetDeviceId_.empty() && !sameDeviceId(targetDeviceId_, boundDeviceId_)) {
-        const uint64_t now = GetTickCount64();
-        if (now - lastActiveCheckTick_ < 500) return true;
+    const uint64_t now = GetTickCount64();
+
+    // 目标设备变了（App 热切换 / 系统默认设备变化）：只有目标设备上**真的出现了我们的会话**才重绑。
+    // 目标设备被拔掉、VLC 已回退到别的设备时，保持当前兜底绑定 —— 否则一个会话都绑不上，音量就固定死了。
+    if (now - lastActiveCheckTick_ >= 500) {
         lastActiveCheckTick_ = now;
-        releaseSessions();
-        lastRetryTick_ = 0;
-        return ensureSession();
+        std::string desired = targetDeviceId_.empty() ? defaultDeviceId() : targetDeviceId_;
+        if (!desired.empty() && !sameDeviceId(desired, boundDeviceId_) &&
+            !collectSessionIds(desired).empty()) {
+            releaseSessions();
+            lastRetryTick_ = 0;
+            return ensureSession();
+        }
     }
+
     for (const BoundSession& bound : sessions_) {
         AudioSessionState state = AudioSessionStateExpired;
         const bool stateOk =
@@ -147,14 +153,14 @@ bool AppVolume::refresh() {
             return ensureSession();
         }
     }
-    // 每 2 秒核对一次「本进程在该设备上的会话集合」：VLC 重建音频输出时可能**新出现**一个会话
-    // （旧会话还挂着不 Expired），只绑定旧的那批会让新会话一直是 100% —— 音量看起来没反应。
-    const uint64_t now = GetTickCount64();
+
+    // 每 2 秒核对一次「当前绑定设备上的会话集合」：VLC 重建音频输出时可能新出现一个会话，
+    // 只绑旧的那批会让新会话一直是 100%。注意按 **当前绑定设备** 核对，兜底绑定时才不会来回重绑。
     if (now - lastSessionSetCheckTick_ >= 2000) {
         lastSessionSetCheckTick_ = now;
-        std::string target = targetDeviceId_;
-        if (target.empty()) target = defaultDeviceId();
-        const std::vector<std::string> current = collectSessionIds(target);
+        std::string watch = boundDeviceId_;
+        if (watch.empty()) watch = targetDeviceId_.empty() ? defaultDeviceId() : targetDeviceId_;
+        const std::vector<std::string> current = collectSessionIds(watch);
         if (current != boundSessionIds_) {
             AppLog::info("AppVolume", "音频会话集合变化（" + std::to_string(current.size()) +
                                           " 个），重新绑定");
@@ -427,21 +433,32 @@ bool AppVolume::ensureSession() {
 
     // 注意：同一条设备上可能同时存在本进程的两个会话（VLC 重建音频输出后旧会话可能残留），
     // 只挑一个会挑到“不出声”的那个：音量写进去没效果。这里把该设备上的会话全部绑定。
-    const bool explicitTarget = !targetDeviceId_.empty();
     std::vector<int> picked;
+    // 1) 目标设备（显式指定，或跟随系统默认设备）
     if (!target.empty()) {
         for (size_t i = 0; i < candidates.size(); ++i) {
             if (sameDeviceId(candidates[i].deviceId, target)) picked.push_back((int)i);
         }
     }
-    if (picked.empty() && !explicitTarget) {
-        // 跟随默认设备：默认设备没有会话时兜底（优先 Active，其次任意）
+    // 2) 目标设备上没有会话：常见于「保存的设备被拔掉」，VLC 会回退到默认设备/别的设备。
+    //    这时必须绑到实际出声的会话上，否则音量彻底调不动（之前严格只绑目标设备导致固定死）。
+    if (picked.empty()) {
+        const std::string fallback = defaultDeviceId();
+        if (!fallback.empty() && !sameDeviceId(fallback, target)) {
+            for (size_t i = 0; i < candidates.size(); ++i) {
+                if (sameDeviceId(candidates[i].deviceId, fallback)) picked.push_back((int)i);
+            }
+        }
+    }
+    // 3) 默认设备也没有：退到任意 Active 会话
+    if (picked.empty()) {
         for (size_t i = 0; i < candidates.size(); ++i) {
             if (candidates[i].state == (int)AudioSessionStateActive) picked.push_back((int)i);
         }
-        if (picked.empty()) {
-            for (size_t i = 0; i < candidates.size(); ++i) picked.push_back((int)i);
-        }
+    }
+    // 4) 最后：本进程任意会话
+    if (picked.empty()) {
+        for (size_t i = 0; i < candidates.size(); ++i) picked.push_back((int)i);
     }
     if (picked.empty()) {
         for (Candidate& candidate : candidates) {
