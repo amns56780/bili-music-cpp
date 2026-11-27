@@ -1,6 +1,6 @@
 # bilimusic · C++ 桌面版 —— AI 交接文档
 
-> 生成时间：2026-11-08 ｜ 当前版本：**v1.1.5**
+> 生成时间：2026-11-08 ｜ 当前版本：**v1.1.6**
 > 交接范围：F:/BiliMusic 下的 cpp/（主用，本机日常播放器）与 source/（Kotlin/Compose 桌面 + Android，参考实现）
 > 姊妹文档：source/HANDOVER-AI.md（Java/Kotlin 版交接，含两端共用数据与分享码契约）
 > 迁移记录：项目根目录 2026-11-08 从 C 盘迁到 **F:/BiliMusic**，清理与验证见 ../MIGRATION-2026-11-08.md（本文内路径已同步更新）
@@ -247,7 +247,7 @@ sourceType 语义：FAV（收藏夹）/ TOVIEW（稍后再看）/ UPLOAD（UP主
 
 - 安装目录 D:/bilimusic（NSIS 按用户安装，375 个文件，exe 约 6.1 MB + vlc 约 135 MB）。
 - 单实例；关窗口默认进托盘，托盘菜单可退出。
-- 最近一次安装：v1.1.5，启动日志「bilimusic v1.1.5 启动」。
+- 最近一次安装：v1.1.6，启动日志「bilimusic v1.1.6 启动」。
 
 ---
 
