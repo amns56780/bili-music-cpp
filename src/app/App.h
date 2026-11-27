@@ -335,6 +335,8 @@ private:
     int multiAction_ = 0;  // 1=复制 2=移动
     bool targetPlaylistDialogRequested_ = false;
     bool deleteSongsDialogRequested_ = false;
+    bool deleteSongDialogRequested_ = false;  // 单曲删除确认（右键菜单）
+    long long pendingRemoveSongId_ = -1;
     bool coverSongDialogRequested_ = false;
     long long coverSongSelectedId_ = -1;
 

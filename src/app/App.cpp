@@ -3419,6 +3419,40 @@ void App::drawM3Dialogs() {
         ImGui::EndPopup();
     }
 
+    // ---- 单曲：删除确认（曲目右键菜单）----
+    if (deleteSongDialogRequested_) ImGui::OpenPopup("删除单曲");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("删除单曲", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!deleteSongDialogRequested_) ImGui::CloseCurrentPopup();
+        const StoredSong* removeTarget =
+            pendingRemoveSongId_ >= 0 ? findSong(pendingRemoveSongId_) : nullptr;
+        ImGui::TextWrapped("从当前歌单删除《%s》？此操作不可恢复。",
+                           removeTarget != nullptr ? Ui::DisplayText(removeTarget->title).c_str()
+                                                   : "未知曲目");
+        ImGui::Spacing();
+        if (ImGui::Button("删除", ImVec2(110.0f, 32.0f))) {
+            if (pendingRemoveSongId_ >= 0) {
+                pushUndo("删除单曲");
+                const int removed = store_.removeSongs({pendingRemoveSongId_});
+                if (removed > 0) {
+                    setStatus("已删除 1 首曲目");
+                } else {
+                    undoStack_.pop_back();  // 没删掉：不留下空撤销点
+                }
+            }
+            pendingRemoveSongId_ = -1;
+            deleteSongDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(110.0f, 32.0f))) {
+            pendingRemoveSongId_ = -1;
+            deleteSongDialogRequested_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     // ---- 封面：从歌单视频选（带缩略图列表 + 大图预览）----
     if (coverSongDialogRequested_) ImGui::OpenPopup("从歌单视频选封面");
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -4307,6 +4341,10 @@ void App::draw() {
         } else {
             undoStack_.pop_back();  // 位置没变：不留下空撤销点
         }
+    }
+    if (pageActions.requestRemoveSong && pageActions.removeSongId >= 0) {
+        pendingRemoveSongId_ = pageActions.removeSongId;
+        deleteSongDialogRequested_ = true;
     }
     if (pageActions.copySelected) {
         if (selectedSongIds_.empty()) {

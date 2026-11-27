@@ -200,7 +200,7 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
     };
     std::vector<RowHit> rowHits;
     rowHits.reserve(songs.size());
-    long long pendingToggleId = -1;
+    static ImVec2 songMenuPos(0.0f, 0.0f);  // 右键菜单弹出位置
 
     // 行内容必须画在这个子窗口自己的 draw list 上：用外层窗口的 draw list 画，滚出视区的行不会被
     // 子窗口裁剪，会漏到表头 / 封面上（表现为「时长」列一串时间飘在表头上面）。
@@ -270,10 +270,38 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
             dragSongId = song.id;
         }
         if (selectMode) {
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) pendingToggleId = song.id;
+            // 单击立即切换选中。旧实现把 id 记到局部变量、等松手那一帧再用，
+            // 而局部变量每帧重置 → 松手帧已经是 -1，所以单点永远选不中（多选失效的根因）。
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                actions->toggleSong = true;
+                actions->toggleSongId = song.id;
+            }
         } else if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !dragSongActive) {
             actions->playSongId = song.id;
         }
+        // 右键：单曲小菜单（播放 / 多选 / 从歌单删除）
+        if (!selectMode && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+            songMenuPos = ImGui::GetIO().MousePos;
+            ImGui::OpenPopup("song_menu");
+        }
+        ImGui::SetNextWindowPos(songMenuPos, ImGuiCond_Appearing);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 7.0f));
+        if (ImGui::BeginPopup("song_menu")) {
+            if (ImGui::Selectable("播放")) actions->playSongId = song.id;
+            if (ImGui::Selectable(selectMode ? "取消多选" : "多选")) {
+                if (!selectMode) actions->toggleSelectMode = true;
+                actions->toggleSong = true;
+                actions->toggleSongId = song.id;
+            }
+            ImGui::Separator();
+            if (ImGui::Selectable("从歌单删除")) {
+                actions->requestRemoveSong = true;
+                actions->removeSongId = song.id;
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar(2);
         ImGui::PopID();
     }
 
@@ -366,9 +394,6 @@ void DrawPlaylistPage(const LibraryStore& store, const StoredPlaylist* playlist,
                 }
                 actions->setSelection = true;
                 actions->selectionIds = std::move(hits);
-            } else if (pendingToggleId >= 0) {
-                actions->toggleSong = true;
-                actions->toggleSongId = pendingToggleId;
             }
             bandArmed = false;
             bandActive = false;

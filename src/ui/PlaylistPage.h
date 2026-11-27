@@ -32,6 +32,9 @@ struct PlaylistPageActions {
     bool copySelected = false;
     bool moveSelected = false;
     bool deleteSelected = false;
+    // 单曲右键菜单：从歌单删除（App 弹确认框）
+    bool requestRemoveSong = false;
+    long long removeSongId = -1;
     // 拖动排序：把歌单内第 reorderSongId 首拖到 reorderSongIndex（0 基）
     bool reorderSong = false;
     long long reorderSongId = -1;
